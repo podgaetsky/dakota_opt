@@ -2,6 +2,8 @@
 
 import csv
 import json
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -62,9 +64,23 @@ class SettingsTests(unittest.TestCase):
         benchmark = ROOT / "templates/file_benchmark.json"
         user = load_settings(benchmark)
         self.assertEqual(user["mode"], "measured")
-        self.assertEqual(Path(user["simulation_script"]), ROOT / "templates/linear_file_model.py")
-        self.assertEqual(Path(user["reference"]), ROOT / "templates/linear_reference.csv")
+        self.assertEqual(Path(user["simulation_script"]), ROOT / "templates/linear_benchmark/model.py")
+        self.assertEqual(Path(user["reference"]), ROOT / "templates/linear_benchmark/reference.csv")
         self.assertEqual(list(config.PARAMETERS), ["a", "b"])
+
+    def test_new_and_legacy_file_model_entry_points(self):
+        reference = ROOT / "templates/linear_benchmark/reference.csv"
+        for model in (ROOT / "templates/linear_benchmark/model.py",
+                      ROOT / "templates/linear_file_model.py"):
+            work = self.folder / model.stem
+            work.mkdir()
+            (work / "physical_params.json").write_text(json.dumps({"a": 1.15, "b": .4}))
+            (work / "reference.csv").write_bytes(reference.read_bytes())
+            subprocess.run([sys.executable, str(model), str(work)], check=True, capture_output=True)
+            with (work / "curve.csv").open() as stream:
+                values = list(csv.DictReader(stream))
+            self.assertEqual(len(values), 9)
+            self.assertAlmostEqual(float(values[0]["y"]), .75)
 
     def test_missing_custom_script_fails_before_run(self):
         self.template["simulation_script"] = "missing_model.py"
@@ -94,8 +110,8 @@ class FileAnalysisTests(unittest.TestCase):
             self.assertEqual(len(list(csv.DictReader(stream))), 3)
 
     def test_shipped_file_benchmark_known_chi_squared(self):
-        result, _ = analyze_files(ROOT / "templates/linear_reference.csv",
-                                  ROOT / "templates/linear_example_prediction.csv", .05, 2)
+        result, _ = analyze_files(ROOT / "templates/linear_benchmark/reference.csv",
+                      ROOT / "templates/linear_benchmark/example_prediction.csv", .05, 2)
         self.assertAlmostEqual(result["chi_squared"], 3.09, places=9)
         self.assertAlmostEqual(result["reduced_chi_squared"], 3.09 / 7, places=9)
 

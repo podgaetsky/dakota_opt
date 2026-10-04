@@ -1,9 +1,15 @@
 # Dakota 6.23: parallel curve fitting and native batch EGO
 
+See the [project map](docs/PROJECT_LAYOUT.md) for the purpose of each group of
+files. Install the [Python requirements](requirements.txt) in your own
+environment (for example, `python -m pip install -r requirements.txt`);
+Dakota 6.23 is installed separately. Outputs go under `runs/`
+and are not committed.
+
 ## Start here: editable templates and automatic reports
 
-Install Dakota 6.23 and Python packages NumPy, SciPy, Matplotlib, scikit-learn,
-ArviZ and corner (see installation below). From this directory, using the Python
+Install Dakota 6.23 and the Python packages in `requirements.txt`
+(see installation below). From this directory, using the Python
 environment with those packages:
 
     python tool.py check
@@ -34,8 +40,8 @@ store all evaluated curves and best-so-far diagnostics.
 ### File-based benchmark you can edit
 
 The runnable [file benchmark template](templates/file_benchmark.json) uses the
-[nine-point CSV](templates/linear_reference.csv) as its **synthetic** observations
-and the editable [forward model](templates/linear_file_model.py). That model reads
+[nine-point CSV](templates/linear_benchmark/reference.csv) as its **synthetic** observations
+and the editable [forward model](templates/linear_benchmark/model.py). That model reads
 each evaluation's `physical_params.json` and `reference.csv`, then writes
 `curve.csv` with columns `x,y` on the identical x grid. It uses the line
 $m(x)=a+bx$; replace that function with your own file parser/simulator and
@@ -67,9 +73,9 @@ To compare two arbitrary x,y CSVs without Dakota, use:
     python file_analysis.py --reference path/to/observed.csv --prediction path/to/model.csv --sigma 0.05 --fitted-parameters 2 --output path/to/figures
 
 For a zero-setup numerical check, compare the included reference to the
-[example prediction](templates/linear_example_prediction.csv):
+[example prediction](templates/linear_benchmark/example_prediction.csv):
 
-    python file_analysis.py --reference templates/linear_reference.csv --prediction templates/linear_example_prediction.csv --sigma 0.05 --fitted-parameters 2 --output example_analysis
+    python file_analysis.py --reference templates/linear_benchmark/reference.csv --prediction templates/linear_benchmark/example_prediction.csv --sigma 0.05 --fitted-parameters 2 --output example_analysis
 
 This yields χ² ≈ 3.09 and reduced χ² ≈ 0.4414, with a residual CSV, JSON and
 PNG under `example_analysis/`. Change `--sigma` only when independently

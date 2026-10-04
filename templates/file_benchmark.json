@@ -1,7 +1,7 @@
 {
   "mode": "measured",
-  "reference": "linear_reference.csv",
-  "simulation_script": "linear_file_model.py",
+  "reference": "linear_benchmark/reference.csv",
+  "simulation_script": "linear_benchmark/model.py",
   "parameters": {
     "a": {"initial": 1.0, "lower": 0.0, "upper": 2.0},
     "b": {"initial": 0.3, "lower": -1.0, "upper": 1.0}
