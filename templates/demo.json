@@ -1,0 +1,24 @@
+{
+  "mode": "demo",
+  "parameters": {
+    "p1": {"initial": 1.0, "lower": 0.1, "upper": 3.0},
+    "p2": {"initial": 0.5, "lower": 0.01, "upper": 2.0},
+    "p3": {"initial": 10.0, "lower": 1.0, "upper": 20.0},
+    "p4": {"initial": 2.5, "lower": 0.1, "upper": 10.0}
+  },
+  "backend": "local",
+  "concurrency": 8,
+  "cpus_per_evaluation": 1,
+  "memory": "2G",
+  "time_limit": "00:05:00",
+  "partition": "",
+  "job_timeout_seconds": 600,
+  "poll_seconds": 2,
+  "failure_penalty": 1000000,
+  "opt_evaluations": 80,
+  "bo_initial_samples": 24,
+  "bo_batches": 10,
+  "bo_batch_size": 8,
+  "seed": 1729,
+  "mcmc": {"samples": 24000, "build_samples": 48, "sigma": 0.05, "max_ordinates": 9, "validate_samples": 16}
+}

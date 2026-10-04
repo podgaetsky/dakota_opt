@@ -1,0 +1,26 @@
+{
+  "mode": "measured",
+  "reference": "../data/REPLACE_WITH_YOUR_MEASURED_CURVE.csv",
+  "parameters": {
+    "p1": {"initial": 1.0, "lower": 0.1, "upper": 3.0},
+    "p2": {"initial": 0.5, "lower": 0.01, "upper": 2.0},
+    "p3": {"initial": 10.0, "lower": 1.0, "upper": 20.0},
+    "p4": {"initial": 2.5, "lower": 0.1, "upper": 10.0}
+  },
+  "backend": "slurm",
+  "concurrency": 16,
+  "cpus_per_evaluation": 1,
+  "memory": "4G",
+  "time_limit": "00:10:00",
+  "partition": "",
+  "job_timeout_seconds": 3600,
+  "poll_seconds": 3,
+  "failure_penalty": 1000000,
+  "opt_evaluations": 160,
+  "bo_initial_samples": 48,
+  "bo_batches": 16,
+  "bo_batch_size": 16,
+  "seed": 1729,
+  "mcmc": {
+    "samples": 24000, "build_samples": 128, "sigma": null, "max_ordinates": 9, "validate_samples": 24}
+}

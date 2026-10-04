@@ -1,0 +1,24 @@
+{
+  "mode": "measured",
+  "reference": "linear_reference.csv",
+  "simulation_script": "linear_file_model.py",
+  "parameters": {
+    "a": {"initial": 1.0, "lower": 0.0, "upper": 2.0},
+    "b": {"initial": 0.3, "lower": -1.0, "upper": 1.0}
+  },
+  "backend": "local",
+  "concurrency": 4,
+  "cpus_per_evaluation": 1,
+  "memory": "2G",
+  "time_limit": "00:05:00",
+  "partition": "",
+  "job_timeout_seconds": 600,
+  "poll_seconds": 2,
+  "failure_penalty": 1000000,
+  "opt_evaluations": 60,
+  "bo_initial_samples": 12,
+  "bo_batches": 8,
+  "bo_batch_size": 4,
+  "seed": 1729,
+  "mcmc": {"samples": 24000, "build_samples": 48, "sigma": 0.05, "max_ordinates": 9, "validate_samples": 16}
+}
