@@ -1,5 +1,23 @@
 # Dakota 6.23: parallel curve fitting and native batch EGO
 
+## Dakota-free scientific curve audit
+
+The new [scientific audit guide](docs/SCIENTIFIC_AUDIT.md) documents the optimizer-independent
+[fit-quality package](fit_quality/__init__.py): CSV curves, optional parameter/noise JSON,
+heteroscedastic or correlated Gaussian likelihood, residual structure, local
+identifiability, optional held-out data and posterior-predictive curves. **No
+Dakota binary or Slurm is required** for file-only analysis:
+
+    python -m fit_quality --reference templates/linear_benchmark/reference.csv --prediction templates/linear_benchmark/example_prediction.csv --parameters templates/linear_benchmark/parameters.json --parameter-definitions templates/file_benchmark.json --parameter-count 2 --noise-model templates/linear_benchmark/noise.json --output example_analysis
+
+Open the generated HTML and inspect its separate goodness-of-fit, independence,
+identifiability and validation statuses. New optimization runs also link a
+separate scientific audit and save `provenance.json`; these checks never turn a
+small in-sample RMS into predictive accuracy or a global-optimality certificate.
+Formal $\chi^2$ p-values are withheld unless the user attests their assumptions.
+Direct DREAM curve runs now default to **full observations**; templates with
+`mcmc.max_ordinates` explicitly request a likelihood-changing thinning mode.
+
 See the [project map](docs/PROJECT_LAYOUT.md) for the purpose of each group of
 files. Install the [Python requirements](requirements.txt) in your own
 environment (for example, `python -m pip install -r requirements.txt`);
@@ -36,6 +54,40 @@ not be used for credible-interval claims unless all diagnostics pass. Use
 `python tool.py report runs/YOUR_RUN` to regenerate an audit after further
 analysis. `tool.py list` shows recent run statuses. The `opt`/`bo` controllers
 store all evaluated curves and best-so-far diagnostics.
+
+### Optional QUESO Bayesian calibration (not an optimizer)
+
+`opt` and `bo` still minimize RMS and are unchanged. QUESO is a **Bayesian
+calibration sampler**, not another RMS optimizer. To sample parameters for the
+same curve model *separately* from an optimization run, set `mcmc.backend` to
+`queso` in a copy of a template, use the
+[QUESO file benchmark template](templates/queso_file_benchmark.json), or
+select it on the command line:
+
+    python tool.py mcmc templates/queso_file_benchmark.json
+    python tool.py mcmc templates/file_benchmark.json --backend queso
+
+This uses Dakota `bayes_calibration queso` with DRAM, the existing bounded
+uniform parameters, a GP emulator of the **curve ordinates**, and the template's
+independently justified observation SD. It does not reuse an optimized RMS as
+a likelihood or change optimization output. QUESO requires Dakota compiled
+with QUESO; this machine's Dakota 6.23 build **does not include QUESO**. A
+preflight check writes `dakota_check.log` and fails clearly if unsupported;
+use the default `dream` backend here. To prepare a deck for another machine:
+
+    python mcmc_run.py --mode curve --settings templates/file_benchmark.json --backend queso --prepare-only
+
+The QUESO export is a **single chain**: the report shows exploratory parameter
+summaries but leaves R̂/ESS and exact-vs-GP log-density validation unavailable,
+and **never marks it inference-ready**. Do not use its intervals for scientific
+claims without independently replicated chains, convergence checks and exact
+posterior-region validation. The QUESO example sets `validate_samples` to 0
+because the current exact-vs-GP log-density validator reads DREAM chains only;
+increasing it will not validate QUESO. The three standard templates explicitly
+select `mcmc.backend: dream` so existing runs are unaffected. `--backend`
+overrides the template for `mcmc` only, not `opt`/`bo`. `backend` at the top
+level independently selects the simulator execution mode (`local`, `slurm`, or
+`allocation`), **not** the sampler.
 
 ### File-based benchmark you can edit
 
@@ -183,8 +235,8 @@ Replace the reference path with **measured** hydrodynamics data and supply a
 `variance_type = 'scalar'` calibration data records the **variance** σ², not σ;
 `mcmc_run.py` squares `--sigma`. An incorrectly supplied SD in place of variance
 made a test posterior >4× too wide, and the analytic benchmark caught it.
-The curve mode evenly selects up to `--max-ordinates` reference locations (default
-15) to keep separate GP models tractable; this changes the likelihood. The
+The curve mode uses the full reference curve by default; explicit `--max-ordinates`
+selects evenly spaced locations to keep separate GP models tractable and changes the likelihood. The
 simulator is `simulate.py` until replaced; for benchmark mode it is an explicit
 two-parameter linear curve with a closed-form Gaussian posterior. Backend
 `BACKEND="slurm"` submits model-building and exact-validation evaluations;

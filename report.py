@@ -23,6 +23,7 @@ PLOT_NAMES = {
     "surrogate_validation.png": "Dakota GP versus exact simulator log density",
     "exact_posterior_curves.png": "Exact simulator predictions and residuals",
     "posterior_predictive.png": "Benchmark latent-curve interval",
+    "prior_posterior.png": "Bounded uniform prior vs sampled posterior; sensitivity to alternative priors untested",
     "benchmark_marginals.png": "Benchmark: posterior versus analytic reference",
 }
 
@@ -36,6 +37,11 @@ def audit(run):
     recommendations = []
     if "mcmc_backend" in settings:
         kind = "mcmc"
+        backend = settings["mcmc_backend"]
+        selection = settings.get("likelihood_data_selection")
+        if selection and selection["mode"] != "full_curve":
+            checks.append({"label": "Calibration-data thinning", "state": "warn", "detail":
+                           f"Used {selection['selected_ordinates']} of {selection['original_ordinates']} points. This changes the likelihood; not equivalent to full-data inference."})
         summary = json.loads((run / "posterior_summary.json").read_text())
         validation_path = run / "validation.json"
         validation = json.loads(validation_path.read_text()) if validation_path.exists() else None
@@ -52,7 +58,7 @@ def audit(run):
                        else "Incomplete chain diagnostics: rerun mcmc_analyze.py")
             checks.append({"label": f"Chain mixing · {name}", "state": state, "detail": details})
         if any(item["state"] != "pass" for item in checks):
-            recommendations.append("Increase DREAM generations, inspect rank/trace plots for multimodality and consider physically justified reparameterization; do not report intervals yet.")
+            recommendations.append("Inspect traces for multimodality, run independent chains and validate mixing and the surrogate before reporting intervals.")
         if validation:
             error = validation.get("log_density_error_p90", math.inf)
             samples = validation.get("validated_samples", 0)
@@ -67,7 +73,8 @@ def audit(run):
                 recommendations.append("Run at least 16 exact posterior checks; if GP error is high, add training points near posterior mass and rerun MCMC.")
         else:
             checks.append({"label": "GP emulator vs exact simulations", "state": "missing",
-                           "detail": "No validation.json: execute mcmc_validate.py RUN before inference."})
+                           "detail": ("QUESO log-density export is not compatible with DREAM validation; GP accuracy remains unverified."
+                                      if backend == "queso" else "No validation.json: execute mcmc_validate.py RUN before inference.")})
         finite = lambda values: [v for v in values if isinstance(v, (float, int)) and math.isfinite(v)]
         rhats = finite(summary.get("rhat", {}).values())
         bulk_ess = finite(summary.get("ess_bulk", {}).values())
@@ -80,14 +87,15 @@ def audit(run):
         checks.append({"label": "Scientific likelihood / model discrepancy", "state": "unknown",
                        "detail": "Noise covariance, priors, simulator bias and held-out observables require domain validation; numerically good chains cannot check these."})
         if settings.get("mode") == "benchmark":
-            checks.append({"label": "Analytic Gaussian benchmark", "state": "pass" if
-                           all(v < .08 for v in summary.get("descriptive_marginal_ks_D", {}).values())
-                           and bool(summary.get("descriptive_marginal_ks_D")) else "warn",
+            benchmark_state = ("pass" if all(v < .08 for v in summary.get("descriptive_marginal_ks_D", {}).values())
+                               and bool(summary.get("descriptive_marginal_ks_D")) else "warn")
+            checks.append({"label": "Analytic Gaussian benchmark", "state": benchmark_state if backend == "dream" else "unknown",
                            "detail": "Marginal KS D is descriptive only; autocorrelated MCMC draws have no ordinary KS p-value."})
         else:
             recommendations.append("Verify the assumed independent Gaussian per-ordinate noise SD using measurements or replicate simulations; inspect residual correlation and held-out observables.")
         numerical = all(c["state"] == "pass" for c in checks
                 if c["label"].startswith(("Chain mixing", "GP emulator", "Analytic Gaussian benchmark")))
+        numerical = numerical and backend == "dream"
         headline = "Numerical checks passed · scientific validity unverified" if numerical else "Not inference-ready · review chain/GP checks"
         metrics["numerical_checks_passed"] = numerical
         metrics["posterior_intervals"] = summary.get("posterior", {})
@@ -133,8 +141,17 @@ def audit(run):
                        "detail": "A small RMS, GP predictive SD, or late plateau alone cannot establish a global optimum or parameter confidence region."})
         recommendations.append("Use independent starts, a larger budget and held-out curve predictions for optimization robustness; compare to observation noise only if justified.")
         headline = "Optimization completed · optimum is not certified"
+    quality_path = run / "fit_quality" / "report.json"
+    quality = json.loads(quality_path.read_text()) if quality_path.is_file() else None
+    if quality:
+        metrics["scientific_status"] = quality["scientific_status"]
+        checks.append({"label": "Independent scientific curve audit", "state": "unknown",
+                       "detail": "See fit_quality/report.html for distinct goodness-of-fit, residual, identifiability and predictive checks; missing evidence is UNKNOWN."})
+    provenance = run / "provenance.json"
     return {"run": run.name, "kind": kind, "headline": headline,
             "metrics": metrics, "checks": checks, "recommendations": recommendations,
+            "assumption_audit": quality["assumption_audit"] if quality else {},
+            "provenance": json.loads(provenance.read_text()) if provenance.is_file() else None,
             "generated_utc": datetime.now().astimezone().isoformat()}
 
 
@@ -149,6 +166,11 @@ def render(run, result):
                       f'<figcaption>{esc(title)}</figcaption></figure>'
                       for name, title in PLOT_NAMES.items() if (run / "plots" / name).exists())
     recommendations = "".join(f"<li>{esc(value)}</li>" for value in result["recommendations"])
+    assumptions = "".join(f"<tr><td>{esc(name)}</td><td>{esc(state)}</td></tr>" for name, state in result.get("assumption_audit", {}).items())
+    scientific_link = ('<p><a href="fit_quality/report.html">Open independent scientific curve audit →</a></p>'
+                       if (run / "fit_quality/report.html").is_file() else '<p>No independent curve audit available.</p>')
+    provenance_link = ('<p><a href="provenance.json">Input provenance and forward-model SHA-256</a></p>'
+                       if (run / "provenance.json").is_file() else '<p>Legacy run: provenance file unavailable.</p>')
     parameters = (f'<h2>Conditional parameter intervals</h2><p>Not valid until chain + surrogate checks pass AND physics assumptions are independently justified.</p>'
                   f'<pre>{esc(json.dumps(result["metrics"].get("posterior_intervals"), indent=2))}</pre>'
                   f'<h2>Per-chain move fractions</h2><p>Fraction of retained consecutive draws that differ; inspect traces and ranks for sticking. Nonzero movement alone does not prove mixing.</p>'
@@ -172,6 +194,7 @@ figcaption{{color:#536279;font-size:.9rem;margin:.5rem}}pre{{white-space:pre-wra
 </style></head><body><header><p class="sub">Dakota run diagnostic • {esc(result["kind"])}</p>
 <h1>{esc(result["headline"])}</h1><p>{esc(result["run"])}</p><p class="sub">Generated {esc(result["generated_utc"])}</p></header>
 <section class="panel"><h2>At a glance</h2><div class="metrics">{cards}</div></section>
+<section class="panel"><h2>Scientific status (separate questions)</h2>{scientific_link}<table>{assumptions}</table>{provenance_link}</section>
 <section class="panel"><h2>Checks and interpretation</h2><table><thead><tr><th>State</th><th>Check</th><th>Meaning</th></tr></thead><tbody>{checks}</tbody></table>
 <h2>What to do next</h2><ul>{recommendations}</ul>{parameters}</section><h2>Figures</h2><div class="grid">{figures}</div>
 <footer><p>Exploratory numerics are not a physical-model validation. KS p-values require independent datasets; MCMC draws are correlated.</p></footer></body></html>'''

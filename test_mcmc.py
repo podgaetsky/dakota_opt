@@ -8,8 +8,9 @@ from pathlib import Path
 import numpy as np
 from scipy.stats import kstest
 
-from mcmc_analyze import analytic_linear_posterior, read_chains
+from mcmc_analyze import analytic_linear_posterior, analyze, read_chains, read_queso_chain
 from mcmc_run import BENCHMARK, calibration_record, input_text
+from report import audit
 from sbc_benchmark import run_sbc
 
 
@@ -40,6 +41,51 @@ class BayesianTests(unittest.TestCase):
             self.assertEqual(x.shape, (4, 2, 2))
             self.assertEqual(logp.shape, (4, 2))
             self.assertEqual(x[0, 1, 0], .3)
+
+    def test_queso_deck_and_annotated_chain(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            text = input_text(root, BENCHMARK, 9, 501, 48, 123, "queso")
+            self.assertIn("bayes_calibration queso", text)
+            self.assertIn("dram", text)
+            self.assertIn("export_chain_points_file 'chain.dat'", text)
+            self.assertNotIn("chains = 4", text)
+            self.assertIn("calibration_terms = 9", text)
+            (root / "chain.dat").write_text(
+                "%mcmc_id interface x_a x_b response\n"
+                "1 APPROX_INTERFACE_1 0.2 0.3 1\n"
+                "2 APPROX_INTERFACE_1 0.21 0.31 1\n"
+                "3 APPROX_INTERFACE_1 0.22 0.32 1\n"
+                "4 APPROX_INTERFACE_1 0.23 0.33 1\n")
+            np.testing.assert_allclose(read_queso_chain(root, ("a", "b"))[0, 0], [.2, .3])
+            (root / "chain.dat").write_text("%mcmc_id x_a x_b\n1 nan 0.2\n2 0.1 0.2\n3 0.2 0.2\n4 0.3 0.2\n")
+            with self.assertRaisesRegex(ValueError, "finite"):
+                read_queso_chain(root, ("a", "b"))
+
+    def test_queso_report_never_passes_inference_checks(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "config.json").write_text(json.dumps({"mcmc_backend": "queso", "mode": "curve",
+                "parameters": {"a": BENCHMARK["a"]}}))
+            (root / "posterior_summary.json").write_text(json.dumps({"posterior": {"a": {"median": 1.0}}}))
+            result = audit(root)
+            self.assertFalse(result["metrics"]["numerical_checks_passed"])
+            self.assertTrue(any(c["state"] == "missing" for c in result["checks"]))
+
+    def test_queso_single_chain_analysis_is_exploratory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "config.json").write_text(json.dumps({"mcmc_backend": "queso", "mode": "curve",
+                "parameters": {"a": BENCHMARK["a"]}, "sigma": .05}))
+            (root / "reference.csv").write_text("x,y\n0,1\n1,2\n")
+            draws = np.random.default_rng(123).uniform(.3, .7, 300)
+            (root / "chain.dat").write_text("%mcmc_id interface x_a least_sq_term_1_1\n" +
+                "".join(f"{i} GP {v:.8f} 1.0\n" for i, v in enumerate(draws, 1)))
+            summary = analyze(root)
+            self.assertEqual(summary["retained_draws"], 150)
+            self.assertEqual(summary["rhat"], {})
+            self.assertIn("EXPLORATORY", summary["posterior_interpretation"])
+            self.assertFalse(audit(root)["metrics"]["numerical_checks_passed"])
 
     def test_independent_sbc_pit_is_calibrated(self):
         pit, results = run_sbc(500, .05, 2748)

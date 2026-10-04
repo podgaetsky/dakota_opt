@@ -20,5 +20,11 @@
   "bo_batches": 8,
   "bo_batch_size": 4,
   "seed": 1729,
-  "mcmc": {"backend": "dream", "samples": 24000, "build_samples": 48, "sigma": 0.05, "max_ordinates": 9, "validate_samples": 16}
+  "mcmc": {
+    "backend": "queso",
+    "samples": 24000,
+    "build_samples": 48,
+    "sigma": 0.05,
+    "validate_samples": 0
+  }
 }

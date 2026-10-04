@@ -68,6 +68,21 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(Path(user["reference"]), ROOT / "templates/linear_benchmark/reference.csv")
         self.assertEqual(list(config.PARAMETERS), ["a", "b"])
 
+    def test_mcmc_backends_are_explicit_in_templates(self):
+        for name in ("demo", "file_benchmark", "physical_curve"):
+            data = json.loads((ROOT / "templates" / f"{name}.json").read_text())
+            self.assertEqual(data["mcmc"]["backend"], "dream")
+        queso = ROOT / "templates/queso_file_benchmark.json"
+        user = load_settings(queso)
+        self.assertEqual(user["mcmc"]["backend"], "queso")
+        self.assertEqual(user["mcmc"]["validate_samples"], 0)
+        self.assertEqual(Path(user["reference"]), ROOT / "templates/linear_benchmark/reference.csv")
+        self.assertEqual(Path(user["simulation_script"]), ROOT / "templates/linear_benchmark/model.py")
+        self.assertEqual(config.BACKEND, "local")
+        self.template["mcmc"]["backend"] = "typo"
+        with self.assertRaisesRegex(ValueError, "mcmc.backend"):
+            load_settings(self.write(self.template))
+
     def test_new_and_legacy_file_model_entry_points(self):
         reference = ROOT / "templates/linear_benchmark/reference.csv"
         for model in (ROOT / "templates/linear_benchmark/model.py",

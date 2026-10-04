@@ -11,6 +11,7 @@ from pathlib import Path
 
 import config
 from driver import curve
+from provenance import write_provenance
 from settings import load_settings
 from simulate import simulate_curve
 
@@ -100,7 +101,7 @@ def main():
     run_dir.mkdir(parents=True)
     for name in ("params", "logs", "slurm", "results", "plots"):
         (run_dir / name).mkdir()
-    (run_dir / "config.json").write_text(json.dumps({
+    settings = {
         "parameters": config.PARAMETERS, "backend": config.BACKEND,
         "mode": user["mode"], "reference_source": user["reference"],
         "simulation_script": user["simulation_script"] or "simulate.py",
@@ -110,8 +111,11 @@ def main():
         "partition": config.PARTITION, "job_timeout_seconds": config.JOB_TIMEOUT_SECONDS,
         "poll_seconds": config.POLL_SECONDS,
         "failure_penalty": config.FAILURE_PENALTY, "kind": args.kind,
+        "seed": config.SEED, "opt_evaluations": config.OPT_EVALUATIONS,
+        "bo_batches": config.BO_BATCHES, "bo_batch_size": config.BO_BATCH_SIZE,
         "bo_initial_samples": config.BO_INITIAL_SAMPLES,
-    }, indent=2))
+    }
+    (run_dir / "config.json").write_text(json.dumps(settings, indent=2))
     # Example reference data; replace with an actual measured reference.csv.
     if user["mode"] == "measured":
         (run_dir / "reference.csv").write_bytes(Path(user["reference"]).read_bytes())
@@ -125,6 +129,7 @@ def main():
     else:
         raise ValueError("Replace the demo reference generation in run.py for new parameters")
     (run_dir / "dakota.in").write_text(input_text(args.kind, run_dir))
+    write_provenance(run_dir, settings, args.dakota, user["reference"])
     (run_dir / "run_command.txt").write_text(f"{args.dakota} -i dakota.in -o dakota.out -e dakota.err\n")
     print(run_dir, flush=True)
     if args.prepare_only:

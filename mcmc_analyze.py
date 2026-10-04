@@ -30,6 +30,31 @@ def read_chains(run, names):
     return np.stack([chain[:size, 2:] for chain in raw]), np.stack([chain[:size, 1] for chain in raw])
 
 
+def read_queso_chain(run, names):
+    """Read the annotated Dakota chain export, never the GP build-point table."""
+    path = run / "chain.dat"
+    if not path.is_file():
+        raise ValueError("QUESO chain.dat is missing; inspect Dakota output")
+    with path.open() as stream:
+        header = stream.readline().lstrip("%# ").split()
+        columns = ["x_" + name for name in names]
+        if len(set(header)) != len(header) or not set(columns).issubset(header):
+            raise ValueError("QUESO chain.dat needs annotated x_<parameter> columns")
+        positions = [header.index(column) for column in columns]
+        points = []
+        for number, line in enumerate(stream, 2):
+            if not line.strip():
+                continue
+            fields = line.split()
+            if len(fields) != len(header):
+                raise ValueError(f"Invalid QUESO chain row {number}: wrong column count")
+            points.append([float(fields[index]) for index in positions])
+    values = np.asarray(points, dtype=float)
+    if values.ndim != 2 or values.shape[0] < 4 or not np.all(np.isfinite(values)) or np.any(values < -1e-8) or np.any(values > 1 + 1e-8):
+        raise ValueError("QUESO chain must have >=4 finite normalized parameter draws within bounds")
+    return values[np.newaxis, :, :]
+
+
 def analytic_linear_posterior(xs, ys, sigma):
     """Unbounded flat-prior Gaussian regression; check bounds before comparing."""
     design = np.column_stack((np.ones(len(xs)), xs))
@@ -48,16 +73,17 @@ def analyze(run):
     lower = np.array([settings["parameters"][name]["lower"] for name in names])
     span = np.array([settings["parameters"][name]["upper"] - lower[i]
                      for i, name in enumerate(names)])
-    normalized, logp = read_chains(run, names)
+    backend = settings.get("mcmc_backend", "dream")
+    normalized = read_queso_chain(run, names) if backend == "queso" else read_chains(run, names)[0]
     chains = lower + normalized * span
     burn = chains.shape[1] // 2  # conservative fixed 50% warm-up; not automatically valid
     retained = chains[:, burn:, :]
     flat = retained.reshape(-1, len(names))
-    inference = az.from_dict(posterior={name: retained[:, :, i] for i, name in enumerate(names)})
-    rhat = az.rhat(inference, var_names=names)
-    ess = az.ess(inference, var_names=names, method="bulk")
-    ess_tail = az.ess(inference, var_names=names, method="tail")
-    mcse = az.mcse(inference, var_names=names, method="mean")
+    inference = az.from_dict(posterior={name: retained[:, :, i] for i, name in enumerate(names)}) if backend == "dream" else None
+    rhat = az.rhat(inference, var_names=names) if inference is not None else None
+    ess = az.ess(inference, var_names=names, method="bulk") if inference is not None else None
+    ess_tail = az.ess(inference, var_names=names, method="tail") if inference is not None else None
+    mcse = az.mcse(inference, var_names=names, method="mean") if inference is not None else None
     plots = run / "plots"
     plots.mkdir(exist_ok=True)
     truth = [1.15, .4] if settings["mode"] == "benchmark" else None
@@ -76,37 +102,55 @@ def analyze(run):
         axes[j, 0].axvline(burn, color="black", ls="--", lw=1)
         axes[j, 0].set_ylabel(name)
     axes[0, 0].legend(ncol=4, fontsize=7)
-    axes[-1, 0].set_xlabel("DREAM generation (dashed: discard boundary)")
+    axes[-1, 0].set_xlabel(f"{backend.upper()} sample (dashed: discard boundary)")
     figure.savefig(plots / "trace.png", dpi=180)
     plt.close(figure)
-    az.plot_rank(inference, var_names=names, kind="vlines", figsize=(10, max(3, 2.5 * len(names))))
-    figure = plt.gcf()
-    figure.savefig(plots / "rank.png", dpi=180, bbox_inches="tight")
-    plt.close(figure)
-    az.plot_autocorr(inference, var_names=names, max_lag=min(80, retained.shape[1] // 3),
-                     figsize=(10, max(3, 2.6 * len(names))))
-    figure = plt.gcf()
-    figure.savefig(plots / "autocorrelation.png", dpi=180, bbox_inches="tight")
-    plt.close(figure)
+    if inference is not None:
+        az.plot_rank(inference, var_names=names, kind="vlines", figsize=(10, max(3, 2.5 * len(names))))
+        figure = plt.gcf()
+        figure.savefig(plots / "rank.png", dpi=180, bbox_inches="tight")
+        plt.close(figure)
+        az.plot_autocorr(inference, var_names=names, max_lag=min(80, retained.shape[1] // 3),
+                         figsize=(10, max(3, 2.6 * len(names))))
+        figure = plt.gcf()
+        figure.savefig(plots / "autocorrelation.png", dpi=180, bbox_inches="tight")
+        plt.close(figure)
 
     with (run / "reference.csv").open(newline="") as stream:
         observed = np.array([[float(r["x"]), float(r["y"])] for r in csv.DictReader(stream)])
-    summary = {"method": "Dakota DREAM, native GP emulator of curve ordinates",
+    summary = {"method": f"Dakota {backend.upper()}, native GP emulator of curve ordinates",
                "assumption": "independent Gaussian errors with known sigma and bounded uniform priors",
-               "posterior_interpretation": "Provisional until validation.json checks surrogate and chain diagnostics",
+               "posterior_interpretation": ("Provisional until validation.json checks surrogate and chain diagnostics"
+                                            if backend == "dream" else
+                                            "EXPLORATORY: single QUESO chain cannot establish convergence; GP accuracy is not validated"),
                "warmup_discarded_per_chain": burn, "retained_draws": len(flat),
-               "rhat": {n: float(rhat[n].values) for n in names},
-               "ess_bulk": {n: float(ess[n].values) for n in names},
-               "ess_tail": {n: float(ess_tail[n].values) for n in names},
-               "mcse_mean": {n: float(mcse[n].values) for n in names},
+               "rhat": {n: float(rhat[n].values) for n in names} if rhat is not None else {},
+               "ess_bulk": {n: float(ess[n].values) for n in names} if ess is not None else {},
+               "ess_tail": {n: float(ess_tail[n].values) for n in names} if ess_tail is not None else {},
+               "mcse_mean": {n: float(mcse[n].values) for n in names} if mcse is not None else {},
                "mcse_mean_fraction_of_posterior_sd": {
-                   n: float(mcse[n].values / np.std(flat[:, i], ddof=1)) for i, n in enumerate(names)},
+                   n: float(mcse[n].values / np.std(flat[:, i], ddof=1)) for i, n in enumerate(names)} if mcse is not None else {},
                "chain_move_fraction": {n: [float(np.mean(np.diff(retained[c, :, i]) != 0))
                                             for c in range(retained.shape[0])]
                                        for i, n in enumerate(names)},
                "posterior": {n: {"median": float(np.median(flat[:, i])),
                                  "equal_tailed_95": list(map(float, np.quantile(flat[:, i], [.025, .975])))}
-                             for i, n in enumerate(names)}}
+                             for i, n in enumerate(names)},
+               "posterior_parameter_correlation": np.corrcoef(flat, rowvar=False).tolist() if len(names) > 1 else [[1.]],
+               "prior_posterior_comparison": {n: {"prior_uniform_bounds": [float(lower[i]), float(lower[i] + span[i])],
+                   "posterior_95_width_as_prior_fraction": float(np.ptp(np.quantile(flat[:, i], [.025, .975])) / span[i])}
+                   for i, n in enumerate(names)},
+               "prior_sensitivity": "NOT ASSESSED: rerun with scientifically justified alternative priors/bounds and compare posteriors."}
+    figure, axes = plt.subplots(1, len(names), figsize=(max(5, 4 * len(names)), 3.4), squeeze=False, layout="constrained")
+    for i, name in enumerate(names):
+        ax = axes[0, i]
+        ax.hist(flat[:, i], bins=40, density=True, alpha=.6, label="posterior")
+        ax.axhline(1 / span[i], ls="--", color="crimson", label="uniform bounded prior")
+        ax.set(xlim=(lower[i], lower[i] + span[i]), title=name, xlabel="physical parameter")
+        if i == 0:
+            ax.legend(fontsize=8)
+    figure.savefig(plots / "prior_posterior.png", dpi=170)
+    plt.close(figure)
     if settings["mode"] == "benchmark":
         expected, covariance = analytic_linear_posterior(observed[:, 0], observed[:, 1], settings["sigma"])
         distances = np.minimum((expected - lower) / np.sqrt(np.diag(covariance)),
@@ -138,7 +182,7 @@ def analyze(run):
                                     layout="constrained", squeeze=False)
         for i, name in enumerate(names):
             ax = axes[0, i]
-            ax.hist(flat[:, i], bins=35, density=True, color="steelblue", alpha=.5, label="DREAM")
+            ax.hist(flat[:, i], bins=35, density=True, color="steelblue", alpha=.5, label=backend.upper())
             grid = np.linspace(expected[i] - 4 * np.sqrt(covariance[i, i]),
                                expected[i] + 4 * np.sqrt(covariance[i, i]), 150)
             ax.plot(grid, stats.norm.pdf(grid, expected[i], np.sqrt(covariance[i, i])),

@@ -22,5 +22,5 @@
   "bo_batch_size": 16,
   "seed": 1729,
   "mcmc": {
-    "samples": 24000, "build_samples": 128, "sigma": null, "max_ordinates": 9, "validate_samples": 24}
+    "backend": "dream", "samples": 24000, "build_samples": 128, "sigma": null, "max_ordinates": 9, "validate_samples": 24}
 }

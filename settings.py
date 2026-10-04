@@ -49,8 +49,10 @@ def load_settings(path, reference_override=None):
     if config.BO_BATCH_SIZE > config.CONCURRENCY:
         raise ValueError("bo_batch_size cannot exceed concurrency")
     mcmc = data.get("mcmc", {})
-    if not isinstance(mcmc, dict) or set(mcmc) - {"samples", "build_samples", "sigma", "max_ordinates", "validate_samples"}:
+    if not isinstance(mcmc, dict) or set(mcmc) - {"samples", "build_samples", "sigma", "max_ordinates", "validate_samples", "backend"}:
         raise ValueError("Invalid mcmc settings; check template keys")
+    if mcmc.get("backend", "dream") not in {"dream", "queso"}:
+        raise ValueError("mcmc.backend must be dream or queso")
     script = data.get("simulation_script")
     if script is not None:
         if not isinstance(script, str) or not script.strip():

@@ -13,7 +13,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
-from scipy.stats import chi2
+from scipy.stats import chi2, spearmanr
 
 from driver import curve, run_job
 from mcmc_analyze import read_chains
@@ -22,6 +22,9 @@ from mcmc_analyze import read_chains
 def validate(run, samples=16):
     run = Path(run).resolve()
     settings = json.loads((run / "config.json").read_text())
+    if settings.get("mcmc_backend", "dream") != "dream":
+        raise ValueError("Exact-vs-GP log-density validation requires DREAM chain log densities; "
+                         "QUESO chain export is not compatible. Do not use QUESO intervals for inference.")
     names = list(settings["parameters"])
     normalized, surrogate_logp = read_chains(run, names)
     burn = normalized.shape[1] // 2
@@ -59,6 +62,16 @@ def validate(run, samples=16):
     # Log likelihoods differ by an additive constant; compare centered values.
     delta = (exact - approx) - np.median(exact - approx)
     discrepancy = float(np.quantile(np.abs(delta), .9))
+    raw_delta = exact - approx
+    density_metrics = {"log_density_error_rmse_centered": float(np.sqrt(np.mean(delta ** 2))),
+                       "log_density_error_mae_centered": float(np.mean(np.abs(delta))),
+                       "log_density_error_max_centered": float(np.max(np.abs(delta))),
+                       "log_density_spearman": float(spearmanr(exact, approx).statistic)
+                       if len(exact) >= 3 and np.std(exact) > 0 and np.std(approx) > 0 else None,
+                       "log_density_offset_median": float(np.median(raw_delta)),
+                       "predictive_interval_coverage": None,
+                       "negative_log_predictive_density": None,
+                       "note": "Dakota does not export GP predictive variances here; interval coverage and NLPD unavailable. Metrics are local to these exact posterior-region draws."}
     predictions = np.array(predictions)
     plots = run / "plots"
     plots.mkdir(exist_ok=True)
@@ -100,6 +113,7 @@ def validate(run, samples=16):
     status = {"validated_samples": len(indices),
               "exact_validation_curves": str((validation_dir / "exact_validation_curves.csv").relative_to(run)),
               "log_density_error_p90": discrepancy,
+              **density_metrics,
               "exact_chi2_min": float(-2 * np.max(exact)),
               "chi2_999_threshold": float(chi2.ppf(.999, len(expected))),
               "max_rhat": max(rhat.values()), "min_bulk_ess": min(ess.values()),

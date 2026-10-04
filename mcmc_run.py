@@ -1,4 +1,4 @@
-"""Dakota 6.23 DREAM/MUQ calibration of curve ordinates with native GP emulation."""
+"""Dakota DREAM or optional QUESO calibration of curves with native GP emulation."""
 
 import argparse
 import csv
@@ -14,6 +14,7 @@ from pathlib import Path
 import config
 from driver import curve
 from mcmc_simulate import benchmark_model
+from provenance import write_provenance
 from settings import load_settings
 
 ROOT = Path(__file__).resolve().parent
@@ -27,19 +28,21 @@ def calibration_record(observations, sigma):
                      *(f"{sigma ** 2:.17g}" for _ in observations)]) + "\n"
 
 
-def input_text(run, parameters, n_obs, samples, build_samples, seed):
+def input_text(run, parameters, n_obs, samples, build_samples, seed, backend="dream"):
+    if backend not in ("dream", "queso"):
+        raise ValueError("MCMC backend must be dream or queso")
     names = list(parameters)
     initial = [(p["initial"] - p["lower"]) / (p["upper"] - p["lower"])
                for p in parameters.values()]
     driver = " ".join(map(shlex.quote, (sys.executable, str(ROOT / "mcmc_driver.py"))))
+    sampler = (f"bayes_calibration dream\n        chain_samples = {samples}\n        chains = 4" if backend == "dream"
+               else f"bayes_calibration queso\n        chain_samples = {samples}\n        dram")
     return f"""environment
   tabular_data
     tabular_data_file 'dakota_tabular.dat'
 
 method
-    bayes_calibration dream
-        chain_samples = {samples}
-        chains = 4
+    {sampler}
         seed = {seed}
         emulator gaussian_process dakota
             build_samples = {build_samples}
@@ -75,6 +78,8 @@ responses
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=("benchmark", "curve"), default="benchmark")
+    parser.add_argument("--backend", choices=("dream", "queso"), default=None,
+                        help="Dakota Bayesian calibration backend (default dream); QUESO requires a QUESO-enabled Dakota build")
     parser.add_argument("--settings", type=Path, help="editable JSON settings template")
     parser.add_argument("--samples", type=int, default=None)
     parser.add_argument("--build-samples", type=int, default=None)
@@ -84,25 +89,29 @@ def main():
     parser.add_argument("--validate-samples", type=int, default=None,
                         help="exact simulation evaluations at posterior draws; 0 skips (not recommended)")
     parser.add_argument("--max-ordinates", type=int, default=None,
-                        help="evenly spaced curve ordinates for independent-noise likelihood (curve mode)")
+                        help="EXPLICIT computational thinning; default full curve unless configured in settings")
     parser.add_argument("--dakota", default=os.environ.get("DAKOTA", "dakota"))
     parser.add_argument("--prepare-only", action="store_true")
     args = parser.parse_args()
     user = load_settings(args.settings, args.reference) if args.settings else {"mcmc": {}, "reference": None, "simulation_script": None}
+    if args.backend is None:
+        args.backend = user["mcmc"].get("backend", "dream")
     if args.mode == "curve" and args.reference is None and user.get("reference"):
         args.reference = Path(user["reference"])
     for key, default in (("samples", 24000), ("build_samples", 48),
-                         ("validate_samples", 16), ("max_ordinates", 15)):
+                         ("validate_samples", 16)):
         if getattr(args, key) is None:
             setattr(args, key, user["mcmc"].get(key, default))
+    if args.max_ordinates is None:
+        args.max_ordinates = user["mcmc"].get("max_ordinates")
     if args.sigma is None:
         args.sigma = user["mcmc"].get("sigma", .05 if args.mode == "benchmark" else None)
     if args.mode == "curve" and args.sigma is None:
         parser.error("Curve MCMC needs a justified --sigma or mcmc.sigma in settings")
     if args.samples < 100 or args.build_samples < 8 or not math.isfinite(args.sigma) or args.sigma <= 0 or args.validate_samples < 0:
         parser.error("Need samples >= 100, build-samples >= 8 and positive sigma")
-    if args.samples % 4 or args.max_ordinates < 2:
-        parser.error("DREAM samples must be divisible by four and max-ordinates >= 2")
+    if (args.backend == "dream" and args.samples % 4) or (args.max_ordinates is not None and args.max_ordinates < 2):
+        parser.error("DREAM samples must be divisible by four; max-ordinates must be >= 2")
     if args.mode == "curve" and (args.reference is None or not args.reference.is_file()):
         parser.error("--mode curve requires an existing --reference x,y CSV")
     if args.mode == "curve":
@@ -134,8 +143,9 @@ def main():
         # Explicit, deterministic thinning limits the number of emulated outputs.
         # Independent-noise assumption still needs scientific validation.
         import numpy as np
-        selected = np.unique(np.linspace(0, len(original) - 1,
-                                         min(len(original), args.max_ordinates), dtype=int))
+        selected = (np.arange(len(original)) if args.max_ordinates is None else
+                np.unique(np.linspace(0, len(original) - 1,
+                          min(len(original), args.max_ordinates), dtype=int)))
         with (run / "reference.csv").open("w", newline="") as stream:
             writer = csv.writer(stream)
             writer.writerow(("x", "y"))
@@ -153,23 +163,40 @@ def main():
                 "poll_seconds": config.POLL_SECONDS,
                 "simulation_script": ("mcmc_simulate.py" if args.mode == "benchmark"
                                       else user["simulation_script"] or "simulate.py"),
-                "sigma": args.sigma, "seed": args.seed, "mode": args.mode, "mcmc_backend": "dream",
-                "samples": args.samples, "build_samples": args.build_samples}
+                "sigma": args.sigma, "seed": args.seed, "mode": args.mode, "mcmc_backend": args.backend,
+                "samples": args.samples, "build_samples": args.build_samples,
+                "likelihood_data_selection": {"mode": "full_curve" if args.mode == "benchmark" or args.max_ordinates is None else "explicit_thinning",
+                                              "selected_ordinates": len(observations),
+                                              "original_ordinates": len(original) if args.mode == "curve" else len(observations),
+                                              "warning": "Thinning changes the likelihood; full curve is default when no max_ordinates is specified."}}
     (run / "config.json").write_text(json.dumps(settings, indent=2))
+    write_provenance(run, settings, args.dakota, args.reference)
     (run / "dakota.in").write_text(input_text(run, parameters, len(observations),
-                                                 args.samples, args.build_samples, args.seed))
+                                                 args.samples, args.build_samples, args.seed, args.backend))
     print(run, flush=True)
     if args.prepare_only:
         return
+    if args.backend == "queso":
+        # -check checks method instantiation, not just keyword parsing. The stock
+        # Dakota binary can parse 'queso' but was built without HAVE_QUESO.
+        preflight = subprocess.run([args.dakota, "-i", "dakota.in", "-check"], cwd=run,
+                                   capture_output=True, text=True, check=False)
+        (run / "dakota_check.log").write_text(preflight.stdout + preflight.stderr)
+        if preflight.returncode:
+            raise SystemExit("QUESO unavailable or input invalid in this Dakota build; see "
+                             f"{run / 'dakota_check.log'}. Use --backend dream or install a QUESO-enabled Dakota.")
     with (run / "dakota_console.log").open("w") as console:
         result = subprocess.run([args.dakota, "-i", "dakota.in", "-o", "dakota.out", "-e", "dakota.err"],
                                 cwd=run, stdout=console, stderr=subprocess.STDOUT, check=False)
     if result.returncode:
         raise SystemExit(f"Dakota failed ({result.returncode}); see {run / 'dakota.err'} and dakota_console.log")
     subprocess.run([sys.executable, str(ROOT / "mcmc_analyze.py"), str(run)], check=True)
-    if args.validate_samples:
+    if args.validate_samples and args.backend == "dream":
         subprocess.run([sys.executable, str(ROOT / "mcmc_validate.py"), str(run),
                         "--samples", str(args.validate_samples)], check=True)
+    elif args.backend == "queso":
+        print("QUESO: single exported chain cannot establish multi-chain convergence; "
+              "DREAM-only GP log-density validation was not run. Intervals are exploratory.")
 
 
 if __name__ == "__main__":

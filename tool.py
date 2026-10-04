@@ -6,6 +6,8 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
+from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -39,6 +41,17 @@ def launch(program, options, env):
         if (run / "posterior_summary.json").exists() or (run / "best.json").exists():
             settings = json.loads((run / "config.json").read_text())
             sigma = settings.get("diagnostic_sigma")
+            if (run / "best.json").is_file():
+                best = json.loads((run / "best.json").read_text())
+                command = [sys.executable, "-m", "fit_quality", "--reference", str(run / "reference.csv"),
+                           "--prediction", str(run / best["curve_file"]), "--parameters", str(run / "best.json"),
+                           "--parameter-definitions", str(run / "config.json"), "--parameter-count",
+                           str(len(settings["parameters"])), "--output", str(run / "fit_quality")]
+                if sigma is not None:
+                    noise_path = run / "fit_noise.json"
+                    noise_path.write_text(json.dumps({"sigma": sigma}) + "\n")
+                    command += ["--noise-model", str(noise_path)]
+                subprocess.run(command, cwd=ROOT, env=env, check=True)
             if (run / "best.json").is_file() and sigma is not None:
                 subprocess.run([sys.executable, str(ROOT / "file_analysis.py"), "--run", str(run),
                                 "--sigma", str(sigma)], cwd=ROOT, env=env, check=True)
@@ -49,11 +62,15 @@ def launch(program, options, env):
 
 def main():
     parser = argparse.ArgumentParser(description="Dakota optimization/MCMC launcher and offline diagnostics")
-    parser.add_argument("command", choices=("check", "demo", "opt", "bo", "mcmc", "analyze", "report", "list"))
+    parser.add_argument("command", choices=("check", "demo", "opt", "bo", "mcmc", "replicate", "analyze", "report", "list"))
     parser.add_argument("path", nargs="?", type=Path, help="JSON template for opt/bo/mcmc; run directory for report")
     parser.add_argument("--dakota", help="Dakota 6.23 executable, otherwise auto-detect")
     parser.add_argument("--reference", type=Path, help="override measured curve in the template")
     parser.add_argument("--sigma", type=float, help="independently justified measurement noise SD for MCMC")
+    parser.add_argument("--backend", choices=("dream", "queso"),
+                        help="MCMC sampler (default dream); QUESO needs a Dakota build with QUESO support")
+    parser.add_argument("--repeats", type=int, default=3, help="independent randomized starts/seeds for replicate command")
+    parser.add_argument("--method", choices=("opt", "bo"), default="opt", help="optimizer to replicate")
     args = parser.parse_args()
     if args.command == "list":
         for run in sorted((ROOT / "runs").iterdir(), reverse=True):
@@ -99,14 +116,45 @@ def main():
     if args.path is None:
         parser.error(f"{args.command} requires a JSON template, e.g. templates/demo.json")
     template = args.path.resolve()
+    if args.command == "replicate":
+        if args.repeats < 2:
+            parser.error("replicate needs >=2 independent randomized starts")
+        import numpy as np
+        from fit_quality.robustness import summarize
+        source = json.loads(template.read_text())
+        rng = np.random.default_rng(source.get("seed", 1729))
+        if args.reference:
+            source["reference"] = str(args.reference.resolve())
+        if source.get("reference"):
+            source["reference"] = str((template.parent / source["reference"]).resolve())
+        if source.get("simulation_script"):
+            source["simulation_script"] = str((template.parent / source["simulation_script"]).resolve())
+        runs = []
+        for index in range(args.repeats):
+            config = json.loads(json.dumps(source))
+            config["seed"] = int(rng.integers(1, 2**30))
+            for spec in config["parameters"].values():
+                spec["initial"] = float(rng.uniform(spec["lower"], spec["upper"]))
+            with tempfile.TemporaryDirectory(prefix="dakota-replicate-") as temp:
+                temporary = Path(temp) / "settings.json"
+                temporary.write_text(json.dumps(config))
+                runs.extend(launch("run.py", [args.method, "--settings", str(temporary), "--dakota", dakota], env))
+        saved = ROOT / "runs" / (datetime.now().strftime("%Y-%m-%d_%H%M%S") + "_robustness.json")
+        saved.write_text(json.dumps(summarize(runs), indent=2) + "\n")
+        print(f"Independent starts completed: {saved} (optimizer reproducibility, not identifiability)")
+        return
     extra = ["--settings", str(template), "--dakota", dakota]
     if args.reference:
         extra += ["--reference", str(args.reference.resolve())]
     if args.command == "mcmc":
         if args.sigma is not None:
             extra += ["--sigma", str(args.sigma)]
+        if args.backend is not None:
+            extra += ["--backend", args.backend]
         launch("mcmc_run.py", ["--mode", "curve", *extra], env)
     else:
+        if args.backend is not None:
+            parser.error("--backend applies to mcmc; QUESO is a sampler, not an optimization objective")
         launch("run.py", [args.command, *extra], env)
 
 
