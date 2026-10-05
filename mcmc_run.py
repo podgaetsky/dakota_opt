@@ -194,8 +194,10 @@ def main():
                                    capture_output=True, text=True, check=False)
         (run / "dakota_check.log").write_text(preflight.stdout + preflight.stderr)
         if preflight.returncode:
-            raise SystemExit("QUESO unavailable or input invalid in this Dakota build; see "
-                             f"{run / 'dakota_check.log'}. Use --backend dream or install a QUESO-enabled Dakota.")
+            if "QUESO Bayesian calibration method unavailable" in preflight.stdout + preflight.stderr:
+                raise SystemExit("This Dakota build does not include QUESO; see "
+                                 f"{run / 'dakota_check.log'}. Use --backend dream or install a QUESO-enabled Dakota.")
+            raise SystemExit(f"Dakota QUESO input check failed; see {run / 'dakota_check.log'}.")
     with (run / "dakota_console.log").open("w") as console:
         result = subprocess.run([args.dakota, "-i", "dakota.in", "-o", "dakota.out", "-e", "dakota.err"],
                                 cwd=run, stdout=console, stderr=subprocess.STDOUT, check=False)

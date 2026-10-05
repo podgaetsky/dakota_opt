@@ -11,6 +11,7 @@ from datetime import datetime
 from pathlib import Path
 
 import config
+from dakota_checks import check_dakota
 from project import init_project, validate_model
 from resources import cluster_settings, write_scripts
 from settings import load_settings
@@ -111,11 +112,19 @@ def main():
         subprocess.run([sys.executable, str(ROOT / "report.py"), str(run)], check=True)
         return
     profile = cluster_settings(args.cluster) if args.cluster else {}
+    env = os.environ.copy()
+    if profile.get("ld_library_path"):
+        env["LD_LIBRARY_PATH"] = ":".join(profile["ld_library_path"]) + ":" + env.get("LD_LIBRARY_PATH", "")
     if args.command in ("check", "doctor"):
         try:
-            dakota, env = runtime(args.dakota or profile.get("dakota"))
-            subprocess.run([dakota, "-v"], env=env, check=True)
-        except (FileNotFoundError, subprocess.CalledProcessError) as error:
+            dakota, _ = runtime(args.dakota or profile.get("dakota"))
+            if args.command == "doctor":
+                result = check_dakota(dakota, env, profile.get("python", sys.executable))
+                print(f"Dakota: {result['version'] or 'unable to start'} (exit {result['version_exit_code']})")
+                print(f"QUESO: {result['queso']} ({result['queso_detail']})")
+            else:
+                subprocess.run([dakota, "-v"], env=env, check=True)
+        except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
             print(f"Dakota: unavailable ({error})")
         for module in ("numpy", "scipy", "matplotlib", "arviz", "corner", "sklearn"):
             try:
@@ -127,7 +136,7 @@ def main():
             print(f"Slurm {command}: {shutil.which(command) or 'not available'}")
         if args.command == "doctor":
             print(f"Python interpreter: {profile.get('python', sys.executable)}")
-            print("QUESO, sacct accounting and compute-node visibility: require a live cluster probe; not verified")
+            print("sacct accounting and compute-node visibility: not checked locally")
             if args.path:
                 try:
                     user = load_settings(args.path)
@@ -136,7 +145,7 @@ def main():
                 except (OSError, ValueError) as error:
                     print(f"Template: invalid ({error})")
         return
-    dakota, env = runtime(args.dakota or profile.get("dakota"))
+    dakota, _ = runtime(args.dakota or profile.get("dakota"))
     if args.command == "resume":
         if args.path is None:
             parser.error("resume requires an existing run directory")
@@ -149,8 +158,6 @@ def main():
                         "-write_restart", "dakota.rst", "-o", "dakota.out", "-e", "dakota.err"],
                        cwd=run, env=env, check=True)
         return
-    if profile.get("ld_library_path"):
-        env["LD_LIBRARY_PATH"] = ":".join(profile["ld_library_path"]) + ":" + env.get("LD_LIBRARY_PATH", "")
     if args.command == "submit":
         if args.path is None or args.mode is None:
             parser.error("submit requires a template and --mode opt|bo|mcmc")

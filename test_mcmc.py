@@ -4,17 +4,55 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 from scipy.stats import kstest
 
 from mcmc_analyze import analytic_linear_posterior, analyze, read_chains, read_queso_chain
 from mcmc_run import BENCHMARK, calibration_record, input_text
+from dakota_checks import check_dakota
+from benchmark_samplers import compare
 from report import audit
 from sbc_benchmark import run_sbc
 
 
 class BayesianTests(unittest.TestCase):
+    def test_queso_method_check_distinguishes_missing_build_from_bad_deck(self):
+        import subprocess
+        version = subprocess.CompletedProcess([], 0, "Dakota version 6.23\n", "")
+        missing = subprocess.CompletedProcess([], -11, "Error: QUESO Bayesian calibration method unavailable.\n", "")
+        with patch("dakota_checks.subprocess.run", side_effect=(version, missing)) as launch:
+            result = check_dakota("dakota", {}, "/usr/bin/python3")
+        self.assertEqual(result["queso"], "unavailable")
+        self.assertEqual(result["queso_exit_code"], -11)
+        self.assertEqual(launch.call_args.args[0][-3:], ["-i", "dakota.in", "-check"])
+        invalid = subprocess.CompletedProcess([], 1, "Error: invalid calibration input", "")
+        with patch("dakota_checks.subprocess.run", side_effect=(version, invalid)):
+            self.assertEqual(check_dakota("dakota", {}, "/usr/bin/python3")["queso"], "unknown")
+
+    def test_sampler_comparison_rejects_different_references(self):
+        import subprocess
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            calls = iter(("dream", "queso"))
+
+            def fake_launch(*_args, **_kwargs):
+                sampler = next(calls)
+                run = root / "runs" / sampler
+                run.mkdir(parents=True)
+                (run / "posterior_summary.json").write_text(json.dumps({"posterior": {"a": {"median": 1}}}))
+                (run / "config.json").write_text(json.dumps({"parameters": BENCHMARK,
+                    "sigma": .05, "seed": 491, "build_samples": 8,
+                    "likelihood_data_selection": {"selected_ordinates": 9}}))
+                (run / "reference.csv").write_text(f"x,y\n0,{sampler}\n")
+                return subprocess.CompletedProcess([], 0, str(run) + "\n", "")
+
+            with patch("benchmark_samplers.check_dakota", return_value={"queso": "available", "version": "Dakota 6.23"}), patch(
+                    "benchmark_samplers.subprocess.run", side_effect=fake_launch):
+                with self.assertRaisesRegex(RuntimeError, "Sampler inputs differ"):
+                    compare(root / "template.json", "/usr/bin/dakota", root, samples=100, build_samples=8)
+
     def test_exact_posterior_for_orthogonal_linear_design(self):
         xs = np.linspace(-1, 1, 9)
         mean, covariance = analytic_linear_posterior(xs, 1.2 - .3 * xs, .05)
