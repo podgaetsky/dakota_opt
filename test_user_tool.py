@@ -14,6 +14,7 @@ import numpy as np
 from file_analysis import analyze_files, write_analysis
 from driver import evaluate_loss
 from mcmc_validate import validate
+from project import init_project, validate_model
 from report import audit, render
 from resources import write_scripts
 from settings import CONFIG_KEYS, load_settings
@@ -124,6 +125,34 @@ class SettingsTests(unittest.TestCase):
         self.assertIn("#SBATCH --ntasks=4", allocation)
         self.assertIn("#SBATCH --partition=compute", allocation)
         self.assertIn("--workdir", allocation)
+
+    def test_scaffold_and_validate_midpoint_without_dakota(self):
+        project = init_project(self.folder / "project")
+        self.assertTrue((project / "runs/.gitkeep").is_file())
+        reference = project / "reference.csv"
+        reference.write_text("x,y\n0,0\n1,1\n")
+        outcome = validate_model(project / "template.json", workdir=project)
+        self.assertTrue(np.isfinite(outcome["midpoint_rms"]))
+        self.assertEqual(outcome["job_id"], "local")
+        self.assertFalse(list((project / "runs").glob("validate-model-*")))
+
+    def test_execution_sampler_aliases_and_conflicts(self):
+        self.template["execution"] = self.template.pop("backend")
+        self.template["mcmc"]["sampler"] = self.template["mcmc"].pop("backend")
+        user = load_settings(self.write(self.template))
+        self.assertEqual((config.BACKEND, user["mcmc"]["backend"]), ("local", "dream"))
+        self.template["backend"] = "slurm"
+        with self.assertRaisesRegex(ValueError, "execution instead of backend"):
+            load_settings(self.write(self.template))
+
+    def test_schema_reports_invalid_timeout_and_sigma(self):
+        self.template["job_timeout_seconds"] = -1
+        with self.assertRaisesRegex(ValueError, "job_timeout_seconds must be a positive"):
+            load_settings(self.write(self.template))
+        self.template["job_timeout_seconds"] = 600
+        self.template["mcmc"]["sigma"] = -0.1
+        with self.assertRaisesRegex(ValueError, "mcmc.sigma must be a positive"):
+            load_settings(self.write(self.template))
 
     def test_simulation_command_uses_template_paths_and_checks_grid(self):
         reference = self.folder / "reference.csv"

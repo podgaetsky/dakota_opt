@@ -1,8 +1,10 @@
 """Validate user-editable JSON templates without dynamic code execution."""
 
 import json
+import math
 import shlex
 import string
+import warnings
 from pathlib import Path
 
 import config
@@ -16,16 +18,19 @@ CONFIG_KEYS = {
     "bo_initial_samples": "BO_INITIAL_SAMPLES", "bo_batches": "BO_BATCHES",
     "bo_batch_size": "BO_BATCH_SIZE", "seed": "SEED",
 }
+DEFAULTS = {attr: getattr(config, attr) for attr in CONFIG_KEYS.values()}
 
 
 def load_settings(path, reference_override=None):
     """Apply settings for the *current controller process*; runs freeze a snapshot."""
     path = Path(path).resolve()
     data = json.loads(path.read_text())
-    allowed = set(CONFIG_KEYS) | {"mode", "reference", "mcmc", "simulation_script", "simulation", "resources"}
+    allowed = set(CONFIG_KEYS) | {"mode", "reference", "mcmc", "simulation_script", "simulation", "resources", "execution"}
     unknown = set(data) - allowed
     if unknown:
         raise ValueError(f"Unknown template keys: {sorted(unknown)}")
+    for attr, value in DEFAULTS.items():
+        setattr(config, attr, value)
     if data.get("mode") not in ("demo", "measured"):
         raise ValueError("Template must set mode to demo or measured")
     if not isinstance(data.get("parameters"), dict) or not data["parameters"]:
@@ -41,6 +46,12 @@ def load_settings(path, reference_override=None):
     for key, attr in CONFIG_KEYS.items():
         if key in data:
             setattr(config, attr, data[key])
+    if "backend" in data:
+        warnings.warn("backend is deprecated; use execution", DeprecationWarning, stacklevel=2)
+    if "execution" in data:
+        if "backend" in data:
+            raise ValueError("Use execution instead of backend, not both")
+        config.BACKEND = data["execution"]
     resources = data.get("resources", {})
     resource_keys = {"partition": "PARTITION", "cpus": "CPUS_PER_EVALUATION",
                      "mem": "MEMORY", "time": "TIME_LIMIT", "concurrency": "CONCURRENCY",
@@ -61,11 +72,36 @@ def load_settings(path, reference_override=None):
             raise ValueError(f"{key} must be a positive integer")
     if config.BO_BATCH_SIZE > config.CONCURRENCY:
         raise ValueError("bo_batch_size cannot exceed concurrency")
+    for key in ("job_timeout_seconds", "poll_seconds", "failure_penalty"):
+        value = getattr(config, CONFIG_KEYS[key])
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
+            raise ValueError(f"{key} must be a positive finite number; set {key} to a value greater than zero")
+    if type(config.SEED) is not int or config.SEED < 0:
+        raise ValueError("seed must be a nonnegative integer; set seed to 0 or greater")
+    for key in ("memory", "time_limit", "partition"):
+        value = getattr(config, CONFIG_KEYS[key])
+        if not isinstance(value, str) or (key != "partition" and not value.strip()) or "\n" in value:
+            raise ValueError(f"{key} must be a single-line string; set a valid Slurm {key}")
     mcmc = data.get("mcmc", {})
-    if not isinstance(mcmc, dict) or set(mcmc) - {"samples", "build_samples", "sigma", "max_ordinates", "validate_samples", "backend"}:
+    if not isinstance(mcmc, dict) or set(mcmc) - {"samples", "build_samples", "sigma", "max_ordinates", "validate_samples", "backend", "sampler"}:
         raise ValueError("Invalid mcmc settings; check template keys")
+    if "backend" in mcmc:
+        warnings.warn("mcmc.backend is deprecated; use mcmc.sampler", DeprecationWarning, stacklevel=2)
+    if "sampler" in mcmc:
+        if "backend" in mcmc:
+            raise ValueError("Use mcmc.sampler instead of mcmc.backend, not both")
+        mcmc = {**mcmc, "backend": mcmc["sampler"]}
     if mcmc.get("backend", "dream") not in {"dream", "queso"}:
         raise ValueError("mcmc.backend must be dream or queso")
+    for key, minimum in (("samples", 100), ("build_samples", 8), ("validate_samples", 0),
+                         ("max_ordinates", 2)):
+        value = mcmc.get(key)
+        if value is not None and (type(value) is not int or value < minimum):
+            raise ValueError(f"mcmc.{key} must be an integer >= {minimum}; change mcmc.{key}")
+    sigma = mcmc.get("sigma")
+    if sigma is not None and (isinstance(sigma, bool) or not isinstance(sigma, (int, float)) or
+                              not math.isfinite(sigma) or sigma <= 0):
+        raise ValueError("mcmc.sigma must be a positive finite observation SD; set mcmc.sigma > 0")
     script = data.get("simulation_script")
     simulation = data.get("simulation")
     if simulation is not None:

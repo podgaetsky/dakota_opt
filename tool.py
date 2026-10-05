@@ -11,6 +11,7 @@ from datetime import datetime
 from pathlib import Path
 
 import config
+from project import init_project, validate_model
 from resources import cluster_settings, write_scripts
 from settings import load_settings
 
@@ -61,7 +62,7 @@ def launch(program, options, env, workdir=ROOT):
 
 def main():
     parser = argparse.ArgumentParser(description="Dakota optimization/MCMC launcher and offline diagnostics")
-    parser.add_argument("command", choices=("check", "demo", "opt", "bo", "mcmc", "replicate", "analyze", "report", "list", "submit"))
+    parser.add_argument("command", choices=("check", "doctor", "init", "validate-model", "resume", "demo", "opt", "bo", "mcmc", "replicate", "analyze", "report", "list", "submit"))
     parser.add_argument("path", nargs="?", type=Path, help="JSON template for opt/bo/mcmc; run directory for report")
     parser.add_argument("--dakota", help="Dakota 6.23 executable, otherwise auto-detect")
     parser.add_argument("--cluster", help="named cluster profile from clusters/<name>.json")
@@ -71,10 +72,25 @@ def main():
     parser.add_argument("--sigma", type=float, help="independently justified measurement noise SD for MCMC")
     parser.add_argument("--backend", choices=("dream", "queso"),
                         help="MCMC sampler (default dream); QUESO needs a Dakota build with QUESO support")
+    parser.add_argument("--sampler", choices=("dream", "queso"), help="MCMC sampler; replaces --backend")
     parser.add_argument("--repeats", type=int, default=3, help="independent randomized starts/seeds for replicate command")
     parser.add_argument("--method", choices=("opt", "bo"), default="opt", help="optimizer to replicate")
     args = parser.parse_args()
     args.workdir = args.workdir.resolve()
+    if args.sampler:
+        if args.backend:
+            parser.error("Use --sampler or deprecated --backend, not both")
+        args.backend = args.sampler
+    if args.command == "init":
+        if args.path is None:
+            parser.error("init requires a new project directory")
+        print(f"Created {init_project(args.path)}; replace reference.csv and edit model.py before validating")
+        return
+    if args.command == "validate-model":
+        if args.path is None:
+            parser.error("validate-model requires a JSON template")
+        print(json.dumps(validate_model(args.path.resolve(), args.reference, args.cluster, args.workdir), indent=2))
+        return
     if args.command == "list":
         for run in sorted((args.workdir / "runs").iterdir(), reverse=True):
             if (run / "config.json").is_file():
@@ -95,7 +111,44 @@ def main():
         subprocess.run([sys.executable, str(ROOT / "report.py"), str(run)], check=True)
         return
     profile = cluster_settings(args.cluster) if args.cluster else {}
+    if args.command in ("check", "doctor"):
+        try:
+            dakota, env = runtime(args.dakota or profile.get("dakota"))
+            subprocess.run([dakota, "-v"], env=env, check=True)
+        except (FileNotFoundError, subprocess.CalledProcessError) as error:
+            print(f"Dakota: unavailable ({error})")
+        for module in ("numpy", "scipy", "matplotlib", "arviz", "corner", "sklearn"):
+            try:
+                __import__(module)
+                print(f"Python {module}: available")
+            except (ImportError, OSError) as error:
+                print(f"Python {module}: missing ({error})")
+        for command in ("sbatch", "squeue", "sacct", "scancel", "srun"):
+            print(f"Slurm {command}: {shutil.which(command) or 'not available'}")
+        if args.command == "doctor":
+            print(f"Python interpreter: {profile.get('python', sys.executable)}")
+            print("QUESO, sacct accounting and compute-node visibility: require a live cluster probe; not verified")
+            if args.path:
+                try:
+                    user = load_settings(args.path)
+                    print(f"Model: {user['simulation'] or user['simulation_script'] or 'built-in'}")
+                    print(f"Reference: {user['reference'] or 'generated demo data'}")
+                except (OSError, ValueError) as error:
+                    print(f"Template: invalid ({error})")
+        return
     dakota, env = runtime(args.dakota or profile.get("dakota"))
+    if args.command == "resume":
+        if args.path is None:
+            parser.error("resume requires an existing run directory")
+        run = args.path.resolve()
+        for name in ("dakota.in", "dakota.rst", "config.json"):
+            if not (run / name).is_file():
+                parser.error(f"Cannot resume: missing {run / name}")
+        print("Dakota -read_restart reuses cached evaluations; method-state continuation is not guaranteed.")
+        subprocess.run([dakota, "-i", "dakota.in", "-read_restart", "dakota.rst",
+                        "-write_restart", "dakota.rst", "-o", "dakota.out", "-e", "dakota.err"],
+                       cwd=run, env=env, check=True)
+        return
     if profile.get("ld_library_path"):
         env["LD_LIBRARY_PATH"] = ":".join(profile["ld_library_path"]) + ":" + env.get("LD_LIBRARY_PATH", "")
     if args.command == "submit":
@@ -115,16 +168,6 @@ def main():
                                 env=env, text=True, capture_output=True, check=True)
         (destination / "slurm_job_id.txt").write_text(result.stdout.strip() + "\n")
         print(f"Submitted {result.stdout.strip()}: {script}")
-        return
-    if args.command == "check":
-        subprocess.run([dakota, "-v"], env=env, check=True)
-        for module in ("numpy", "scipy", "matplotlib", "arviz", "corner", "sklearn"):
-            try:
-                __import__(module)
-                print(f"Python {module}: available")
-            except (ImportError, OSError) as error:
-                print(f"Python {module}: missing ({error})")
-        print("Slurm sbatch:", shutil.which("sbatch") or "not available (local demo still works)")
         return
     if args.command == "demo":
         if args.path is not None:
