@@ -10,33 +10,32 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 
+import config
+from resources import cluster_settings, write_scripts
+from settings import load_settings
+
 ROOT = Path(__file__).resolve().parent
 
 
 def runtime(dakota=None):
     env = os.environ.copy()
-    deps = Path.home() / ".local/opt/dakota-6.23-deps/usr/lib/x86_64-linux-gnu"
-    if deps.exists():
-        paths = [deps, deps / "blas", deps / "lapack"]
-        env["LD_LIBRARY_PATH"] = ":".join(map(str, paths)) + ":" + env.get("LD_LIBRARY_PATH", "")
     if dakota:
-        candidate = Path(dakota).expanduser().resolve()
-        if not candidate.is_file():
+        candidate = shutil.which(dakota) or str(Path(dakota).expanduser().resolve())
+        if not Path(candidate).is_file():
             raise FileNotFoundError(f"Dakota executable not found: {candidate}")
-        return str(candidate), env
+        return candidate, env
     executable = shutil.which("dakota")
     if executable:
         return executable, env
-    candidates = sorted((Path.home() / ".local/opt").glob("dakota-6.23.*/bin/dakota"))
-    if candidates:
-        return str(candidates[-1]), env
     raise FileNotFoundError("Dakota executable missing: install Dakota 6.23 or pass --dakota /path/to/dakota")
 
 
-def launch(program, options, env):
-    old = set((ROOT / "runs").iterdir())
+def launch(program, options, env, workdir=ROOT):
+    runs = workdir / "runs"
+    runs.mkdir(parents=True, exist_ok=True)
+    old = set(runs.iterdir())
     subprocess.run([sys.executable, str(ROOT / program), *options], cwd=ROOT, env=env, check=True)
-    made = [p for p in (ROOT / "runs").iterdir() if p not in old and p.is_dir()]
+    made = [p for p in runs.iterdir() if p not in old and p.is_dir()]
     for run in sorted(made):
         if (run / "posterior_summary.json").exists() or (run / "best.json").exists():
             settings = json.loads((run / "config.json").read_text())
@@ -62,9 +61,12 @@ def launch(program, options, env):
 
 def main():
     parser = argparse.ArgumentParser(description="Dakota optimization/MCMC launcher and offline diagnostics")
-    parser.add_argument("command", choices=("check", "demo", "opt", "bo", "mcmc", "replicate", "analyze", "report", "list"))
+    parser.add_argument("command", choices=("check", "demo", "opt", "bo", "mcmc", "replicate", "analyze", "report", "list", "submit"))
     parser.add_argument("path", nargs="?", type=Path, help="JSON template for opt/bo/mcmc; run directory for report")
     parser.add_argument("--dakota", help="Dakota 6.23 executable, otherwise auto-detect")
+    parser.add_argument("--cluster", help="named cluster profile from clusters/<name>.json")
+    parser.add_argument("--workdir", type=Path, default=ROOT, help="project root containing runs/")
+    parser.add_argument("--mode", choices=("opt", "bo", "mcmc"), help="controller method for submit")
     parser.add_argument("--reference", type=Path, help="override measured curve in the template")
     parser.add_argument("--sigma", type=float, help="independently justified measurement noise SD for MCMC")
     parser.add_argument("--backend", choices=("dream", "queso"),
@@ -72,8 +74,9 @@ def main():
     parser.add_argument("--repeats", type=int, default=3, help="independent randomized starts/seeds for replicate command")
     parser.add_argument("--method", choices=("opt", "bo"), default="opt", help="optimizer to replicate")
     args = parser.parse_args()
+    args.workdir = args.workdir.resolve()
     if args.command == "list":
-        for run in sorted((ROOT / "runs").iterdir(), reverse=True):
+        for run in sorted((args.workdir / "runs").iterdir(), reverse=True):
             if (run / "config.json").is_file():
                 outcome = run / "report.json"
                 print(f"{run.name}: " + (json.loads(outcome.read_text())["headline"] if outcome.exists() else "no report yet"))
@@ -91,7 +94,28 @@ def main():
                         "--sigma", str(args.sigma)], check=True)
         subprocess.run([sys.executable, str(ROOT / "report.py"), str(run)], check=True)
         return
-    dakota, env = runtime(args.dakota)
+    profile = cluster_settings(args.cluster) if args.cluster else {}
+    dakota, env = runtime(args.dakota or profile.get("dakota"))
+    if profile.get("ld_library_path"):
+        env["LD_LIBRARY_PATH"] = ":".join(profile["ld_library_path"]) + ":" + env.get("LD_LIBRARY_PATH", "")
+    if args.command == "submit":
+        if args.path is None or args.mode is None:
+            parser.error("submit requires a template and --mode opt|bo|mcmc")
+        template = args.path.resolve()
+        load_settings(template)
+        settings = {"concurrency": config.CONCURRENCY, "cpus_per_evaluation": config.CPUS_PER_EVALUATION,
+                    "memory": config.MEMORY, "time_limit": config.TIME_LIMIT,
+                    "partition": profile.get("partition", config.PARTITION),
+                    "python_executable": profile.get("python", sys.executable)}
+        destination = args.workdir / "runs" / "_submissions" / datetime.now().strftime("%Y-%m-%d_%H%M%S_%f")
+        write_scripts(destination, settings, profile, args.mode, template, dakota, args.workdir,
+                  args.cluster)
+        script = destination / "submit_allocation.sh"
+        result = subprocess.run(["sbatch", "--parsable", str(script)], cwd=destination,
+                                env=env, text=True, capture_output=True, check=True)
+        (destination / "slurm_job_id.txt").write_text(result.stdout.strip() + "\n")
+        print(f"Submitted {result.stdout.strip()}: {script}")
+        return
     if args.command == "check":
         subprocess.run([dakota, "-v"], env=env, check=True)
         for module in ("numpy", "scipy", "matplotlib", "arviz", "corner", "sklearn"):
@@ -143,7 +167,9 @@ def main():
         saved.write_text(json.dumps(summarize(runs), indent=2) + "\n")
         print(f"Independent starts completed: {saved} (optimizer reproducibility, not identifiability)")
         return
-    extra = ["--settings", str(template), "--dakota", dakota]
+    extra = ["--settings", str(template), "--dakota", dakota, "--workdir", str(args.workdir)]
+    if args.cluster:
+        extra += ["--cluster", args.cluster]
     if args.reference:
         extra += ["--reference", str(args.reference.resolve())]
     if args.command == "mcmc":
@@ -151,11 +177,11 @@ def main():
             extra += ["--sigma", str(args.sigma)]
         if args.backend is not None:
             extra += ["--backend", args.backend]
-        launch("mcmc_run.py", ["--mode", "curve", *extra], env)
+        launch("mcmc_run.py", ["--mode", "curve", *extra], env, args.workdir)
     else:
         if args.backend is not None:
             parser.error("--backend applies to mcmc; QUESO is a sampler, not an optimization objective")
-        launch("run.py", [args.command, *extra], env)
+        launch("run.py", [args.command, *extra], env, args.workdir)
 
 
 if __name__ == "__main__":

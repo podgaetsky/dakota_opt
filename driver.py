@@ -78,6 +78,9 @@ def evaluate_loss(params, work, run, settings):
 
 def run_job(work, settings, simulation_script="simulate.py"):
     backend = settings["backend"]
+    wrapper = work.parent.parent / "run_slurm.sh"
+    if not wrapper.is_file():
+        wrapper = ROOT / "run_slurm.sh"  # old run directories
     python = settings.get("python_executable", sys.executable)
     simulation = settings.get("simulation")
     if simulation:
@@ -112,7 +115,7 @@ def run_job(work, settings, simulation_script="simulate.py"):
         with (work / "simulation.stdout").open("w") as stdout, (work / "simulation.stderr").open("w") as stderr:
             subprocess.run(["srun", "--exclusive", "--nodes=1", "--ntasks=1",
                             f"--cpus-per-task={settings['cpus_per_evaluation']}",
-                            "bash", str(ROOT / "run_slurm.sh"), *command], cwd=cwd,
+                            "bash", str(wrapper), *command], cwd=cwd,
                            stdout=stdout, stderr=stderr,
                            timeout=settings["job_timeout_seconds"], check=True)
         return f"{os.environ['SLURM_JOB_ID']} (allocation step)"
@@ -124,7 +127,7 @@ def run_job(work, settings, simulation_script="simulate.py"):
            f"--output={work / 'slurm-%j.out'}", f"--error={work / 'slurm-%j.err'}"]
     if settings["partition"]:
         cmd.append(f"--partition={settings['partition']}")
-    cmd.extend([str(ROOT / "run_slurm.sh"), *command])
+    cmd.extend([str(wrapper), *command])
     submission = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=30)
     job_id = submission.stdout.strip().split(";")[0]
     if not re.fullmatch(r"\d+", job_id):

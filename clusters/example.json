@@ -1,0 +1,7 @@
+{
+  "partition": "compute",
+  "modules": [],
+  "python": "/usr/bin/python3",
+  "dakota": "/usr/bin/dakota",
+  "ld_library_path": []
+}

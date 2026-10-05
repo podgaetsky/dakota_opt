@@ -15,6 +15,7 @@ from file_analysis import analyze_files, write_analysis
 from driver import evaluate_loss
 from mcmc_validate import validate
 from report import audit, render
+from resources import write_scripts
 from settings import CONFIG_KEYS, load_settings
 
 ROOT = Path(__file__).resolve().parent
@@ -102,6 +103,27 @@ class SettingsTests(unittest.TestCase):
         self.template["simulation_script"] = "missing_model.py"
         with self.assertRaisesRegex(FileNotFoundError, "Simulation Python script"):
             load_settings(self.write(self.template))
+
+    def test_resource_block_generates_matching_slurm_scripts(self):
+        for key in ("partition", "cpus_per_evaluation", "memory", "time_limit",
+                    "concurrency", "job_timeout_seconds"):
+            del self.template[key]
+        self.template["resources"] = {"partition": "compute", "cpus": 3, "mem": "12G",
+                                      "time": "01:30:00", "concurrency": 4, "timeout": 600}
+        self.template["bo_batch_size"] = 4
+        load_settings(self.write(self.template))
+        self.assertEqual((config.CONCURRENCY, config.CPUS_PER_EVALUATION), (4, 3))
+        values = {"partition": config.PARTITION, "cpus_per_evaluation": config.CPUS_PER_EVALUATION,
+                  "memory": config.MEMORY, "time_limit": config.TIME_LIMIT,
+                  "concurrency": config.CONCURRENCY, "python_executable": sys.executable}
+        run = self.folder / "scripts"
+        write_scripts(run, values, mode="bo", template=self.folder / "settings.json",
+                      workdir=self.folder, dakota="/usr/bin/dakota")
+        self.assertIn("#SBATCH --cpus-per-task=3", (run / "run_slurm.sh").read_text())
+        allocation = (run / "submit_allocation.sh").read_text()
+        self.assertIn("#SBATCH --ntasks=4", allocation)
+        self.assertIn("#SBATCH --partition=compute", allocation)
+        self.assertIn("--workdir", allocation)
 
     def test_simulation_command_uses_template_paths_and_checks_grid(self):
         reference = self.folder / "reference.csv"

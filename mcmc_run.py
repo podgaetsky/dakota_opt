@@ -15,6 +15,7 @@ import config
 from driver import curve
 from mcmc_simulate import benchmark_model
 from provenance import write_provenance
+from resources import cluster_settings, write_scripts
 from settings import load_settings
 
 ROOT = Path(__file__).resolve().parent
@@ -28,13 +29,13 @@ def calibration_record(observations, sigma):
                      *(f"{sigma ** 2:.17g}" for _ in observations)]) + "\n"
 
 
-def input_text(run, parameters, n_obs, samples, build_samples, seed, backend="dream"):
+def input_text(run, parameters, n_obs, samples, build_samples, seed, backend="dream", python_executable=None):
     if backend not in ("dream", "queso"):
         raise ValueError("MCMC backend must be dream or queso")
     names = list(parameters)
     initial = [(p["initial"] - p["lower"]) / (p["upper"] - p["lower"])
                for p in parameters.values()]
-    driver = " ".join(map(shlex.quote, (sys.executable, str(ROOT / "mcmc_driver.py"))))
+    driver = " ".join(map(shlex.quote, (python_executable or sys.executable, str(ROOT / "mcmc_driver.py"))))
     sampler = (f"bayes_calibration dream\n        chain_samples = {samples}\n        chains = 4" if backend == "dream"
                else f"bayes_calibration queso\n        chain_samples = {samples}\n        dram")
     return f"""environment
@@ -92,6 +93,8 @@ def main():
                         help="EXPLICIT computational thinning; default full curve unless configured in settings")
     parser.add_argument("--dakota", default=os.environ.get("DAKOTA", "dakota"))
     parser.add_argument("--prepare-only", action="store_true")
+    parser.add_argument("--cluster", help="named clusters/<name>.json profile")
+    parser.add_argument("--workdir", type=Path, default=ROOT, help="project directory for runs/")
     args = parser.parse_args()
     user = load_settings(args.settings, args.reference) if args.settings else {"mcmc": {}, "reference": None, "simulation_script": None, "simulation": None}
     if args.backend is None:
@@ -118,11 +121,15 @@ def main():
         curve(args.reference)  # reject malformed or non-increasing x before Dakota
     if config.BACKEND not in ("local", "slurm", "allocation"):
         parser.error("Invalid config.BACKEND")
+    profile = cluster_settings(args.cluster) if args.cluster else {}
+    if profile.get("partition"):
+        config.PARTITION = profile["partition"]
     parameters = BENCHMARK if args.mode == "benchmark" else config.PARAMETERS
-    run = ROOT / "runs" / (datetime.now().strftime("%Y-%m-%d_%H%M%S") + "_mcmc_" + args.mode)
+    run_root = args.workdir.resolve() / "runs"
+    run = run_root / (datetime.now().strftime("%Y-%m-%d_%H%M%S") + "_mcmc_" + args.mode)
     suffix = 1
     while run.exists():
-        run = Path(f"{ROOT / 'runs' / (datetime.now().strftime('%Y-%m-%d_%H%M%S') + '_mcmc_' + args.mode)}_{suffix}")
+        run = Path(f"{run_root / (datetime.now().strftime('%Y-%m-%d_%H%M%S') + '_mcmc_' + args.mode)}_{suffix}")
         suffix += 1
     for folder in ("params", "logs", "results", "plots"):
         (run / folder).mkdir(parents=True, exist_ok=True)
@@ -164,17 +171,19 @@ def main():
                 "simulation_script": ("mcmc_simulate.py" if args.mode == "benchmark"
                                       else user["simulation_script"] or "simulate.py"),
                 "simulation": user.get("simulation") if args.mode == "curve" else None,
-                "python_executable": sys.executable,
+                "python_executable": profile.get("python", sys.executable),
                 "sigma": args.sigma, "seed": args.seed, "mode": args.mode, "mcmc_backend": args.backend,
                 "samples": args.samples, "build_samples": args.build_samples,
                 "likelihood_data_selection": {"mode": "full_curve" if args.mode == "benchmark" or args.max_ordinates is None else "explicit_thinning",
                                               "selected_ordinates": len(observations),
                                               "original_ordinates": len(original) if args.mode == "curve" else len(observations),
                                               "warning": "Thinning changes the likelihood; full curve is default when no max_ordinates is specified."}}
+    write_scripts(run, settings, profile)
     (run / "config.json").write_text(json.dumps(settings, indent=2))
     write_provenance(run, settings, args.dakota, args.reference)
     (run / "dakota.in").write_text(input_text(run, parameters, len(observations),
-                                                 args.samples, args.build_samples, args.seed, args.backend))
+                                                 args.samples, args.build_samples, args.seed, args.backend,
+                                                 settings["python_executable"]))
     print(run, flush=True)
     if args.prepare_only:
         return

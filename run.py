@@ -12,13 +12,14 @@ from pathlib import Path
 import config
 from driver import curve
 from provenance import write_provenance
+from resources import cluster_settings, write_scripts
 from settings import load_settings
 from simulate import simulate_curve
 
 ROOT = Path(__file__).resolve().parent
 
 
-def input_text(kind, run_dir):
+def input_text(kind, run_dir, python_executable=None):
     names = list(config.PARAMETERS)
     if not names or any(not name.isidentifier() for name in names):
         raise ValueError("Parameter names must be nonempty Python identifiers")
@@ -41,7 +42,7 @@ def input_text(kind, run_dir):
     )
     quoted_names = " ".join(f"'x_{name}'" for name in names)
     # fork receives argv without shell interpolation. shlex.quote protects paths containing spaces.
-    driver = " ".join(map(shlex.quote, [sys.executable, str(ROOT / "driver.py")]))
+    driver = " ".join(map(shlex.quote, [python_executable or sys.executable, str(ROOT / "driver.py")]))
     return f"""environment
   tabular_data
     tabular_data_file 'dakota_tabular.dat'
@@ -80,6 +81,8 @@ def main():
     parser.add_argument("--settings", type=Path, help="editable JSON settings template")
     parser.add_argument("--reference", type=Path, help="measured x,y CSV (if not supplied in settings)")
     parser.add_argument("--dakota", default=os.environ.get("DAKOTA", "dakota"))
+    parser.add_argument("--cluster", help="named clusters/<name>.json profile")
+    parser.add_argument("--workdir", type=Path, default=ROOT, help="project directory for runs/")
     args = parser.parse_args()
     user = load_settings(args.settings, args.reference) if args.settings else {"mode": "demo", "reference": None, "simulation_script": None}
     if args.reference:
@@ -91,8 +94,11 @@ def main():
         curve(Path(user["reference"]))  # validate before creating a run
     if config.BACKEND not in ("local", "slurm", "allocation"):
         raise ValueError("BACKEND must be local, slurm or allocation")
+    profile = cluster_settings(args.cluster) if args.cluster else {}
+    if profile.get("partition"):
+        config.PARTITION = profile["partition"]
     stamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
-    base = ROOT / "runs" / f"{stamp}_{args.kind}"
+    base = args.workdir.resolve() / "runs" / f"{stamp}_{args.kind}"
     run_dir = base
     suffix = 1
     while run_dir.exists():
@@ -105,7 +111,7 @@ def main():
         "parameters": config.PARAMETERS, "backend": config.BACKEND,
         "mode": user["mode"], "reference_source": user["reference"],
         "simulation_script": user["simulation_script"] or "simulate.py",
-        "simulation": user.get("simulation"), "python_executable": sys.executable,
+        "simulation": user.get("simulation"), "python_executable": profile.get("python", sys.executable),
         "diagnostic_sigma": user.get("mcmc", {}).get("sigma") if user["mode"] == "measured" else None,
         "concurrency": config.CONCURRENCY, "cpus_per_evaluation": config.CPUS_PER_EVALUATION,
         "memory": config.MEMORY, "time_limit": config.TIME_LIMIT,
@@ -116,6 +122,7 @@ def main():
         "bo_batches": config.BO_BATCHES, "bo_batch_size": config.BO_BATCH_SIZE,
         "bo_initial_samples": config.BO_INITIAL_SAMPLES,
     }
+    write_scripts(run_dir, settings, profile)
     (run_dir / "config.json").write_text(json.dumps(settings, indent=2))
     # Example reference data; replace with an actual measured reference.csv.
     if user["mode"] == "measured":
@@ -129,7 +136,7 @@ def main():
                 stream.write(f"{x:.17g},{y:.17g}\n")
     else:
         raise ValueError("Replace the demo reference generation in run.py for new parameters")
-    (run_dir / "dakota.in").write_text(input_text(args.kind, run_dir))
+    (run_dir / "dakota.in").write_text(input_text(args.kind, run_dir, settings["python_executable"]))
     write_provenance(run_dir, settings, args.dakota, user["reference"])
     (run_dir / "run_command.txt").write_text(f"{args.dakota} -i dakota.in -o dakota.out -e dakota.err\n")
     print(run_dir, flush=True)

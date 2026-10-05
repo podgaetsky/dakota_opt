@@ -22,7 +22,7 @@ def load_settings(path, reference_override=None):
     """Apply settings for the *current controller process*; runs freeze a snapshot."""
     path = Path(path).resolve()
     data = json.loads(path.read_text())
-    allowed = set(CONFIG_KEYS) | {"mode", "reference", "mcmc", "simulation_script", "simulation"}
+    allowed = set(CONFIG_KEYS) | {"mode", "reference", "mcmc", "simulation_script", "simulation", "resources"}
     unknown = set(data) - allowed
     if unknown:
         raise ValueError(f"Unknown template keys: {sorted(unknown)}")
@@ -41,6 +41,17 @@ def load_settings(path, reference_override=None):
     for key, attr in CONFIG_KEYS.items():
         if key in data:
             setattr(config, attr, data[key])
+    resources = data.get("resources", {})
+    resource_keys = {"partition": "PARTITION", "cpus": "CPUS_PER_EVALUATION",
+                     "mem": "MEMORY", "time": "TIME_LIMIT", "concurrency": "CONCURRENCY",
+                     "timeout": "JOB_TIMEOUT_SECONDS"}
+    if not isinstance(resources, dict) or set(resources) - set(resource_keys):
+        raise ValueError("resources expects partition, cpus, mem, time, concurrency, timeout")
+    for key, attr in resource_keys.items():
+        if key in resources:
+            if next(k for k, v in CONFIG_KEYS.items() if v == attr) in data:
+                raise ValueError(f"resources.{key} conflicts with flat resource setting; use one location")
+            setattr(config, attr, resources[key])
     if config.BACKEND not in {"local", "slurm", "allocation"}:
         raise ValueError("backend must be local, slurm or allocation")
     for key in ("concurrency", "cpus_per_evaluation", "opt_evaluations",
@@ -105,4 +116,4 @@ def load_settings(path, reference_override=None):
             raise ValueError("Synthetic demo requires the four demo parameters; use measured mode for real data")
     return {"mode": data["mode"], "reference": str(reference) if reference else None,
             "simulation_script": str(script) if script else None, "simulation": simulation, "mcmc": mcmc,
-            "settings_path": str(path)}
+            "resources": resources, "settings_path": str(path)}
