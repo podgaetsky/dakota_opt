@@ -6,6 +6,7 @@ import json
 import math
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -77,12 +78,33 @@ def evaluate_loss(params, work, run, settings):
 
 def run_job(work, settings, simulation_script="simulate.py"):
     backend = settings["backend"]
-    python = sys.executable
+    python = settings.get("python_executable", sys.executable)
+    simulation = settings.get("simulation")
+    if simulation:
+        paths = {"params": str((work / "physical_params.json").resolve()),
+                 "curve": str((work / "curve.csv").resolve()),
+                 "reference": str((work / "reference.csv").resolve()),
+                 "work": str(work.resolve()), "python": python}
+        tokens = shlex.split(simulation["command"])
+        try:
+            command = [token.format_map(paths) for token in tokens]
+        except (KeyError, ValueError) as error:
+            raise ValueError(f"Invalid simulation.command placeholder: {error}") from error
+        if command[0] in ("python", "python3"):
+            command[0] = python
+        # The model source and executable are relative to the template, not the evaluation.
+        for index, token in enumerate(command):
+            candidate = Path(simulation["workdir"]) / token
+            if token != command[0] and not Path(token).is_absolute() and candidate.is_file():
+                command[index] = str(candidate.resolve())
+        cwd = simulation["workdir"]
+    else:
+        command = [python, str(ROOT / simulation_script), str(work)]
+        cwd = work
     if backend == "local":
-        subprocess.run(["bash", str(ROOT / "run_slurm.sh"), python, str(ROOT / simulation_script), str(work)],
-                       cwd=work, stdout=(work / "simulation.stdout").open("w"),
-                       stderr=(work / "simulation.stderr").open("w"),
-                       timeout=settings["job_timeout_seconds"], check=True)
+        with (work / "simulation.stdout").open("w") as stdout, (work / "simulation.stderr").open("w") as stderr:
+            subprocess.run(command, cwd=cwd, stdout=stdout, stderr=stderr,
+                           timeout=settings["job_timeout_seconds"], check=True)
         return "local"
     if backend == "allocation":
         if not os.environ.get("SLURM_JOB_ID"):
@@ -90,8 +112,7 @@ def run_job(work, settings, simulation_script="simulate.py"):
         with (work / "simulation.stdout").open("w") as stdout, (work / "simulation.stderr").open("w") as stderr:
             subprocess.run(["srun", "--exclusive", "--nodes=1", "--ntasks=1",
                             f"--cpus-per-task={settings['cpus_per_evaluation']}",
-                            "bash", str(ROOT / "run_slurm.sh"), python,
-                            str(ROOT / simulation_script), str(work)], cwd=work,
+                            "bash", str(ROOT / "run_slurm.sh"), *command], cwd=cwd,
                            stdout=stdout, stderr=stderr,
                            timeout=settings["job_timeout_seconds"], check=True)
         return f"{os.environ['SLURM_JOB_ID']} (allocation step)"
@@ -103,7 +124,7 @@ def run_job(work, settings, simulation_script="simulate.py"):
            f"--output={work / 'slurm-%j.out'}", f"--error={work / 'slurm-%j.err'}"]
     if settings["partition"]:
         cmd.append(f"--partition={settings['partition']}")
-    cmd.extend([str(ROOT / "run_slurm.sh"), python, str(ROOT / simulation_script), str(work)])
+    cmd.extend([str(ROOT / "run_slurm.sh"), *command])
     submission = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=30)
     job_id = submission.stdout.strip().split(";")[0]
     if not re.fullmatch(r"\d+", job_id):

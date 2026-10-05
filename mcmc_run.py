@@ -93,7 +93,7 @@ def main():
     parser.add_argument("--dakota", default=os.environ.get("DAKOTA", "dakota"))
     parser.add_argument("--prepare-only", action="store_true")
     args = parser.parse_args()
-    user = load_settings(args.settings, args.reference) if args.settings else {"mcmc": {}, "reference": None, "simulation_script": None}
+    user = load_settings(args.settings, args.reference) if args.settings else {"mcmc": {}, "reference": None, "simulation_script": None, "simulation": None}
     if args.backend is None:
         args.backend = user["mcmc"].get("backend", "dream")
     if args.mode == "curve" and args.reference is None and user.get("reference"):
@@ -163,6 +163,8 @@ def main():
                 "poll_seconds": config.POLL_SECONDS,
                 "simulation_script": ("mcmc_simulate.py" if args.mode == "benchmark"
                                       else user["simulation_script"] or "simulate.py"),
+                "simulation": user.get("simulation") if args.mode == "curve" else None,
+                "python_executable": sys.executable,
                 "sigma": args.sigma, "seed": args.seed, "mode": args.mode, "mcmc_backend": args.backend,
                 "samples": args.samples, "build_samples": args.build_samples,
                 "likelihood_data_selection": {"mode": "full_curve" if args.mode == "benchmark" or args.max_ordinates is None else "explicit_thinning",

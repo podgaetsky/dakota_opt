@@ -7,4 +7,4 @@
 #SBATCH --time=00:05:00
 # The Python driver overrides CPU/memory/time via sbatch flags from config.py.
 set -euo pipefail
-"$1" "$2" "$3"
+"$@"

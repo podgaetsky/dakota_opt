@@ -105,6 +105,7 @@ def main():
         "parameters": config.PARAMETERS, "backend": config.BACKEND,
         "mode": user["mode"], "reference_source": user["reference"],
         "simulation_script": user["simulation_script"] or "simulate.py",
+        "simulation": user.get("simulation"), "python_executable": sys.executable,
         "diagnostic_sigma": user.get("mcmc", {}).get("sigma") if user["mode"] == "measured" else None,
         "concurrency": config.CONCURRENCY, "cpus_per_evaluation": config.CPUS_PER_EVALUATION,
         "memory": config.MEMORY, "time_limit": config.TIME_LIMIT,

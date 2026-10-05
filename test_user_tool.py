@@ -12,6 +12,7 @@ from unittest.mock import patch
 import config
 import numpy as np
 from file_analysis import analyze_files, write_analysis
+from driver import evaluate_loss
 from mcmc_validate import validate
 from report import audit, render
 from settings import CONFIG_KEYS, load_settings
@@ -101,6 +102,31 @@ class SettingsTests(unittest.TestCase):
         self.template["simulation_script"] = "missing_model.py"
         with self.assertRaisesRegex(FileNotFoundError, "Simulation Python script"):
             load_settings(self.write(self.template))
+
+    def test_simulation_command_uses_template_paths_and_checks_grid(self):
+        reference = self.folder / "reference.csv"
+        reference.write_text("x,y\n0,1\n1,2\n")
+        model = self.folder / "model.py"
+        model.write_text("""import csv, json, sys
+params = json.load(open(sys.argv[1]))
+with open(sys.argv[2], 'w') as stream:
+    stream.write('x,y\\n0,1\\n1,' + str(params['p1']) + '\\n')
+""")
+        self.template.update(mode="measured", reference="reference.csv",
+                             simulation={"command": "python model.py {params} {curve}", "workdir": "."})
+        user = load_settings(self.write(self.template))
+        run = self.folder / "run"
+        work = run / "params" / "eval.1"
+        work.mkdir(parents=True)
+        (run / "results").mkdir()
+        (run / "reference.csv").write_bytes(reference.read_bytes())
+        settings = {"backend": "local", "simulation": user["simulation"],
+                    "python_executable": sys.executable, "job_timeout_seconds": 30}
+        value, job, _ = evaluate_loss({"p1": 2}, work, run, settings)
+        self.assertEqual((value, job), (0, "local"))
+        model.write_text(model.read_text().replace("0,1", "0.5,1"))
+        with self.assertRaisesRegex(ValueError, "x grids differ"):
+            evaluate_loss({"p1": 2}, work, run, settings)
 
 
 class FileAnalysisTests(unittest.TestCase):

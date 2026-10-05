@@ -1,6 +1,8 @@
 """Validate user-editable JSON templates without dynamic code execution."""
 
 import json
+import shlex
+import string
 from pathlib import Path
 
 import config
@@ -20,7 +22,7 @@ def load_settings(path, reference_override=None):
     """Apply settings for the *current controller process*; runs freeze a snapshot."""
     path = Path(path).resolve()
     data = json.loads(path.read_text())
-    allowed = set(CONFIG_KEYS) | {"mode", "reference", "mcmc", "simulation_script"}
+    allowed = set(CONFIG_KEYS) | {"mode", "reference", "mcmc", "simulation_script", "simulation"}
     unknown = set(data) - allowed
     if unknown:
         raise ValueError(f"Unknown template keys: {sorted(unknown)}")
@@ -54,6 +56,32 @@ def load_settings(path, reference_override=None):
     if mcmc.get("backend", "dream") not in {"dream", "queso"}:
         raise ValueError("mcmc.backend must be dream or queso")
     script = data.get("simulation_script")
+    simulation = data.get("simulation")
+    if simulation is not None:
+        if script is not None:
+            raise ValueError("Use simulation.command instead of simulation_script, not both")
+        if not isinstance(simulation, dict) or set(simulation) != {"command", "workdir"}:
+            raise ValueError("simulation needs command (string) and workdir (directory path)")
+        command, workdir = simulation["command"], simulation["workdir"]
+        if not isinstance(command, str) or not command.strip():
+            raise ValueError("simulation.command must be a nonempty command string; use {params} and {curve}")
+        if not isinstance(workdir, str) or not workdir.strip():
+            raise ValueError("simulation.workdir must be a directory path relative to the template")
+        try:
+            tokens = shlex.split(command)
+        except ValueError as error:
+            raise ValueError(f"simulation.command has invalid quoting: {error}") from error
+        fields = {field for token in tokens for _, field, _, _ in string.Formatter().parse(token) if field}
+        if not tokens or not {"params", "curve"}.issubset(fields):
+            raise ValueError("simulation.command must include {params} and {curve} placeholders")
+        if fields - {"params", "curve", "reference", "work", "python"}:
+            raise ValueError(f"simulation.command unknown placeholders: {sorted(fields)}; use params, curve, reference, work or python")
+        workdir = Path(workdir).expanduser()
+        if not workdir.is_absolute():
+            workdir = path.parent / workdir
+        if not workdir.is_dir():
+            raise FileNotFoundError(f"simulation.workdir not found: {workdir}; create the directory")
+        simulation = {"command": command, "workdir": str(workdir.resolve())}
     if script is not None:
         if not isinstance(script, str) or not script.strip():
             raise ValueError("simulation_script must be a path to an existing Python file")
@@ -76,5 +104,5 @@ def load_settings(path, reference_override=None):
         if set(config.PARAMETERS) != {"p1", "p2", "p3", "p4"}:
             raise ValueError("Synthetic demo requires the four demo parameters; use measured mode for real data")
     return {"mode": data["mode"], "reference": str(reference) if reference else None,
-            "simulation_script": str(script) if script else None, "mcmc": mcmc,
+            "simulation_script": str(script) if script else None, "simulation": simulation, "mcmc": mcmc,
             "settings_path": str(path)}
