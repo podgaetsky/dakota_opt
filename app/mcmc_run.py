@@ -18,7 +18,8 @@ from provenance import write_provenance
 from resources import cluster_settings, write_scripts
 from settings import load_settings
 
-ROOT = Path(__file__).resolve().parent
+APP = Path(__file__).resolve().parent
+ROOT = APP.parent
 BENCHMARK = {"a": {"initial": 1.0, "lower": 0.0, "upper": 2.0},
              "b": {"initial": 0.3, "lower": -1.0, "upper": 1.0}}
 
@@ -35,7 +36,7 @@ def input_text(run, parameters, n_obs, samples, build_samples, seed, backend="dr
     names = list(parameters)
     initial = [(p["initial"] - p["lower"]) / (p["upper"] - p["lower"])
                for p in parameters.values()]
-    driver = " ".join(map(shlex.quote, (python_executable or sys.executable, str(ROOT / "mcmc_driver.py"))))
+    driver = " ".join(map(shlex.quote, (python_executable or sys.executable, str(APP / "mcmc_driver.py"))))
     sampler = (f"bayes_calibration dream\n        chain_samples = {samples}\n        chains = 4" if backend == "dream"
                else f"bayes_calibration queso\n        chain_samples = {samples}\n        dram")
     return f"""environment
@@ -203,9 +204,9 @@ def main():
                                 cwd=run, stdout=console, stderr=subprocess.STDOUT, check=False)
     if result.returncode:
         raise SystemExit(f"Dakota failed ({result.returncode}); see {run / 'dakota.err'} and dakota_console.log")
-    subprocess.run([sys.executable, str(ROOT / "mcmc_analyze.py"), str(run)], check=True)
+    subprocess.run([sys.executable, str(APP / "mcmc_analyze.py"), str(run)], check=True)
     if args.validate_samples and args.backend == "dream":
-        subprocess.run([sys.executable, str(ROOT / "mcmc_validate.py"), str(run),
+        subprocess.run([sys.executable, str(APP / "mcmc_validate.py"), str(run),
                         "--samples", str(args.validate_samples)], check=True)
     elif args.backend == "queso":
         print("QUESO: single exported chain cannot establish multi-chain convergence; "

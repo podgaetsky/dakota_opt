@@ -172,7 +172,7 @@ class ScientificTests(unittest.TestCase):
             validate_surrogate(exact, approx, np.zeros(5))
 
     def test_dakota_free_cli_exposes_missing_validation(self):
-        root = Path(__file__).parent / "templates/linear_benchmark"
+        root = Path(__file__).resolve().parent.parent / "templates/linear_benchmark"
         with tempfile.TemporaryDirectory() as temp:
             command = [sys.executable, "-m", "fit_quality", "--reference", str(root / "reference.csv"),
                        "--prediction", str(root / "example_prediction.csv"),
@@ -185,7 +185,7 @@ class ScientificTests(unittest.TestCase):
             self.assertIn("Scientific assumption audit", (Path(temp) / "report.html").read_text())
 
     def test_multiple_held_out_curves_are_not_training_accuracy(self):
-        root = Path(__file__).parent / "templates/linear_benchmark"
+        root = Path(__file__).resolve().parent.parent / "templates/linear_benchmark"
         with tempfile.TemporaryDirectory() as temp:
             directory = Path(temp)
             manifest = [{"name": "future batch A", "reference": str(root / "reference.csv"),

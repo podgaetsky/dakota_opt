@@ -12,7 +12,8 @@ from pathlib import Path
 
 from dakota_checks import check_dakota
 
-ROOT = Path(__file__).resolve().parent
+APP = Path(__file__).resolve().parent
+ROOT = APP.parent
 
 
 def compare(template, dakota, workdir, samples=4000, build_samples=48, seed=491,
@@ -30,7 +31,7 @@ def compare(template, dakota, workdir, samples=4000, build_samples=48, seed=491,
                "warning": "DREAM and QUESO use different sampling methods; QUESO has one chain and cannot establish multi-chain convergence.",
                "samplers": {}}
     for sampler in ("dream", "queso"):
-        command = [sys.executable, str(ROOT / "mcmc_run.py"), "--mode", mode,
+        command = [sys.executable, str(APP / "mcmc_run.py"), "--mode", mode,
                    "--settings", str(template), "--backend", sampler,
                    "--samples", str(samples), "--build-samples", str(build_samples),
                    "--seed", str(seed), "--validate-samples", "0", "--dakota", dakota,

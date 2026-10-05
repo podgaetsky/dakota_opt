@@ -16,7 +16,8 @@ from project import init_project, validate_model
 from resources import cluster_settings, write_scripts
 from settings import load_settings
 
-ROOT = Path(__file__).resolve().parent
+APP = Path(__file__).resolve().parent
+ROOT = APP.parent
 
 
 def runtime(dakota=None):
@@ -36,7 +37,7 @@ def launch(program, options, env, workdir=ROOT):
     runs = workdir / "runs"
     runs.mkdir(parents=True, exist_ok=True)
     old = set(runs.iterdir())
-    subprocess.run([sys.executable, str(ROOT / program), *options], cwd=ROOT, env=env, check=True)
+    subprocess.run([sys.executable, str(APP / program), *options], cwd=ROOT, env=env, check=True)
     made = [p for p in runs.iterdir() if p not in old and p.is_dir()]
     for run in sorted(made):
         if (run / "posterior_summary.json").exists() or (run / "best.json").exists():
@@ -54,9 +55,9 @@ def launch(program, options, env, workdir=ROOT):
                     command += ["--noise-model", str(noise_path)]
                 subprocess.run(command, cwd=ROOT, env=env, check=True)
             if (run / "best.json").is_file() and sigma is not None:
-                subprocess.run([sys.executable, str(ROOT / "file_analysis.py"), "--run", str(run),
+                subprocess.run([sys.executable, str(APP / "file_analysis.py"), "--run", str(run),
                                 "--sigma", str(sigma)], cwd=ROOT, env=env, check=True)
-            subprocess.run([sys.executable, str(ROOT / "report.py"), str(run)],
+            subprocess.run([sys.executable, str(APP / "report.py"), str(run)],
                            cwd=ROOT, env=env, check=True)
     return made
 
@@ -101,15 +102,15 @@ def main():
     if args.command == "report":
         if args.path is None:
             parser.error("report requires a run directory")
-        subprocess.run([sys.executable, str(ROOT / "report.py"), str(args.path.resolve())], check=True)
+        subprocess.run([sys.executable, str(APP / "report.py"), str(args.path.resolve())], check=True)
         return
     if args.command == "analyze":
         if args.path is None or args.sigma is None:
             parser.error("analyze requires a completed optimization run and --sigma OBSERVATION_SD")
         run = args.path.resolve()
-        subprocess.run([sys.executable, str(ROOT / "file_analysis.py"), "--run", str(run),
+        subprocess.run([sys.executable, str(APP / "file_analysis.py"), "--run", str(run),
                         "--sigma", str(args.sigma)], check=True)
-        subprocess.run([sys.executable, str(ROOT / "report.py"), str(run)], check=True)
+        subprocess.run([sys.executable, str(APP / "report.py"), str(run)], check=True)
         return
     profile = cluster_settings(args.cluster) if args.cluster else {}
     env = os.environ.copy()
@@ -194,6 +195,9 @@ def main():
         if args.repeats < 2:
             parser.error("replicate needs >=2 independent randomized starts")
         import numpy as np
+        # Direct execution from app/ otherwise places only app/ on sys.path.
+        if str(ROOT) not in sys.path:
+            sys.path.insert(0, str(ROOT))
         from fit_quality.robustness import summarize
         source = json.loads(template.read_text())
         rng = np.random.default_rng(source.get("seed", 1729))

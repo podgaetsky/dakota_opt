@@ -19,7 +19,7 @@ from report import audit, render
 from resources import write_scripts
 from settings import CONFIG_KEYS, load_settings
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parent.parent
 
 
 class SettingsTests(unittest.TestCase):
@@ -125,6 +125,7 @@ class SettingsTests(unittest.TestCase):
         self.assertIn("#SBATCH --ntasks=4", allocation)
         self.assertIn("#SBATCH --partition=compute", allocation)
         self.assertIn("--workdir", allocation)
+        self.assertIn(str(ROOT / "app" / "tool.py"), allocation)
 
     def test_scaffold_and_validate_midpoint_without_dakota(self):
         project = init_project(self.folder / "project")

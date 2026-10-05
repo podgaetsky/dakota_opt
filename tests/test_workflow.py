@@ -41,7 +41,9 @@ class WorkflowTests(unittest.TestCase):
 
     def test_dakota_budget(self):
         self.assertIn("max_iterations = 80", input_text("bo", Path("/tmp/example")))
-        self.assertIn("evaluation_concurrency = 8", input_text("opt", Path("/tmp/example")))
+        deck = input_text("opt", Path("/tmp/example"))
+        self.assertIn("evaluation_concurrency = 8", deck)
+        self.assertIn(str(Path(__file__).resolve().parent.parent / "app" / "driver.py"), deck)
 
     def test_failed_evaluation_returns_penalty_and_log(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -55,7 +57,7 @@ class WorkflowTests(unittest.TestCase):
                 "bo_initial_samples": 2}))
             (work / "params.in").write_text("1 variables\n0.5 x_p1\n1 functions\n1 ASV_1\n")
             # Missing reference.csv must be penalized, not silently accepted.
-            subprocess.run([sys.executable, str(Path(__file__).parent / "driver.py"),
+            subprocess.run([sys.executable, str(Path(__file__).resolve().parent.parent / "app" / "driver.py"),
                             "params.in", "results.out"], cwd=work, check=True)
             self.assertEqual((work / "results.out").read_text().strip(), "123456")
             self.assertTrue((run / "logs" / "eval.1.error.txt").exists())

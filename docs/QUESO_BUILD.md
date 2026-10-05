@@ -44,10 +44,10 @@ environment. It installs outside the repository. Its options are:
 
 The locally built binary and any runtime library paths go in a git-ignored
 `clusters/local.json` profile or the process environment, never in committed
-paths. Run `python tool.py doctor --cluster local` first; QUESO is present only
+paths. Run `python app/tool.py doctor --cluster local` first; QUESO is present only
 if the actual `bayes_calibration queso` `-check` reports `available`.
 
-`python benchmark_samplers.py --dakota /path/to/built/dakota --workdir /path/to/project`
+`python app/benchmark_samplers.py --dakota /path/to/built/dakota --workdir /path/to/project`
 runs both samplers on the exact synthetic linear benchmark with identical
 reference, priors, observation sigma, seed, GP training budget, and requested
 samples. Use `--mode curve templates/file_benchmark.json` for the shipped
@@ -62,7 +62,7 @@ when testing a QUESO-enabled build.
 ## Verified local results (2026-10-05)
 
 The script installed Dakota 6.23 (revision `a3b2eb477`) in an isolated
-temporary prefix outside the repository. `tool.py doctor --cluster local`
+temporary prefix outside the repository. `python app/tool.py doctor --cluster local`
 reported `QUESO: available` after actually instantiating the QUESO method.
 Both opt-in tests passed with `DAKOTA_INTEGRATION=1` and
 `DAKOTA_EXPECT_QUESO=1`: a real file-model optimization using

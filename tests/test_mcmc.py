@@ -87,6 +87,7 @@ class BayesianTests(unittest.TestCase):
             self.assertIn("bayes_calibration queso", text)
             self.assertIn("dram", text)
             self.assertIn("export_chain_points_file 'chain.dat'", text)
+            self.assertIn(str(Path(__file__).resolve().parent.parent / "app" / "mcmc_driver.py"), text)
             self.assertNotIn("chains = 4", text)
             self.assertIn("calibration_terms = 9", text)
             (root / "chain.dat").write_text(
@@ -135,7 +136,7 @@ class BayesianTests(unittest.TestCase):
             self.assertLess(kstest(column ** 3, "uniform").pvalue, 1e-5)
 
     def test_verified_dream_benchmark_if_available(self):
-        root = Path(__file__).parent / "runs"
+        root = Path(__file__).resolve().parent.parent / "runs"
         eligible = [p for p in root.glob("*_mcmc_benchmark") if (p / "validation.json").exists()]
         if not eligible:
             self.skipTest("Run mcmc_run.py --mode benchmark first")

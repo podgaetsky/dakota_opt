@@ -16,7 +16,8 @@ from resources import cluster_settings, write_scripts
 from settings import load_settings
 from simulate import simulate_curve
 
-ROOT = Path(__file__).resolve().parent
+APP = Path(__file__).resolve().parent
+ROOT = APP.parent
 
 
 def input_text(kind, run_dir, python_executable=None):
@@ -42,7 +43,7 @@ def input_text(kind, run_dir, python_executable=None):
     )
     quoted_names = " ".join(f"'x_{name}'" for name in names)
     # fork receives argv without shell interpolation. shlex.quote protects paths containing spaces.
-    driver = " ".join(map(shlex.quote, [python_executable or sys.executable, str(ROOT / "driver.py")]))
+    driver = " ".join(map(shlex.quote, [python_executable or sys.executable, str(APP / "driver.py")]))
     return f"""environment
   tabular_data
     tabular_data_file 'dakota_tabular.dat'
@@ -148,9 +149,9 @@ def main():
                             cwd=run_dir, env=env, check=False)
     if result.returncode:
         raise SystemExit(f"Dakota exited {result.returncode}; see {run_dir / 'dakota.err'}")
-    subprocess.run([sys.executable, str(ROOT / "analyze.py"), str(run_dir)], check=True)
+    subprocess.run([sys.executable, str(APP / "analyze.py"), str(run_dir)], check=True)
     if not args.no_plots:
-        subprocess.run([sys.executable, str(ROOT / "plot_results.py"), str(run_dir)], check=True)
+        subprocess.run([sys.executable, str(APP / "plot_results.py"), str(run_dir)], check=True)
 
 
 if __name__ == "__main__":

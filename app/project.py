@@ -12,7 +12,7 @@ from driver import curve, rms, run_job
 from resources import cluster_settings
 from settings import load_settings
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parent.parent
 
 MODEL = '''"""Example forward model; replace y with your physical prediction."""
 import argparse

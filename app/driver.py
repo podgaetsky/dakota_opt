@@ -15,7 +15,8 @@ import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent
+APP = Path(__file__).resolve().parent
+ROOT = APP.parent
 
 
 def parse_parameters(path, specs):
@@ -80,7 +81,7 @@ def run_job(work, settings, simulation_script="simulate.py"):
     backend = settings["backend"]
     wrapper = work.parent.parent / "run_slurm.sh"
     if not wrapper.is_file():
-        wrapper = ROOT / "run_slurm.sh"  # old run directories
+        wrapper = ROOT / "scripts" / "run_slurm.sh"  # old run directories
     python = settings.get("python_executable", sys.executable)
     simulation = settings.get("simulation")
     if simulation:
@@ -102,7 +103,7 @@ def run_job(work, settings, simulation_script="simulate.py"):
                 command[index] = str(candidate.resolve())
         cwd = simulation["workdir"]
     else:
-        command = [python, str(ROOT / simulation_script), str(work)]
+        command = [python, str(APP / simulation_script), str(work)]
         cwd = work
     if backend == "local":
         with (work / "simulation.stdout").open("w") as stdout, (work / "simulation.stderr").open("w") as stderr:

@@ -9,7 +9,8 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent
+APP = Path(__file__).resolve().parent
+ROOT = APP.parent
 
 
 def digest(path):
@@ -28,7 +29,7 @@ def write_provenance(run, settings, dakota=None, reference_source=None):
     run = Path(run).resolve()
     script = Path(settings.get("simulation_script", "simulate.py"))
     if not script.is_absolute():
-        script = ROOT / script
+        script = APP / script
     packages = {}
     for name in ("numpy", "scipy", "matplotlib", "scikit-learn", "arviz", "corner"):
         try:

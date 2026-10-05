@@ -11,7 +11,7 @@ from pathlib import Path
 
 from dakota_checks import check_dakota
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parent.parent
 
 
 @unittest.skipUnless(os.environ.get("DAKOTA_INTEGRATION") == "1",
@@ -20,7 +20,7 @@ class DakotaIntegrationTests(unittest.TestCase):
     def test_file_benchmark_optimization(self):
         dakota = os.environ.get("DAKOTA", "dakota")
         with tempfile.TemporaryDirectory(prefix="dakota-opt-integration-") as directory:
-            subprocess.run([sys.executable, str(ROOT / "tool.py"), "opt",
+            subprocess.run([sys.executable, str(ROOT / "app" / "tool.py"), "opt",
                             str(ROOT / "templates/file_benchmark.json"), "--dakota", dakota,
                             "--workdir", directory], cwd=ROOT, check=True, capture_output=True, text=True)
             runs = list((Path(directory) / "runs").glob("*_opt"))

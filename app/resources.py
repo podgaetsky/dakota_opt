@@ -5,7 +5,7 @@ import shlex
 from pathlib import Path
 from string import Template
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parent.parent
 
 EVALUATION = Template("""#!/bin/bash
 #SBATCH --job-name=dakota-eval
@@ -67,7 +67,7 @@ def write_scripts(run, settings, cluster=None, mode=None, template=None, dakota=
     evaluation.chmod(0o755)
     if mode is not None:
         values.update(python=shlex.quote(settings["python_executable"]),
-                      tool=shlex.quote(str(ROOT / "tool.py")), mode=shlex.quote(mode),
+                      tool=shlex.quote(str(ROOT / "app" / "tool.py")), mode=shlex.quote(mode),
                       workdir=shlex.quote(str(workdir)), template=shlex.quote(str(template)),
                      dakota=(f"--dakota {shlex.quote(str(dakota))}" if dakota else "") +
                          (f" --cluster {shlex.quote(cluster_name)}" if cluster_name else ""))
